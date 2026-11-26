@@ -78,7 +78,7 @@ export async function getReserveBalances(): Promise<Array<{ reserve: Reserve; ba
   const [reserves, movements] = await Promise.all([db.reserves.toArray(), db.reserveMovements.toArray()]);
   return reserves.map((reserve) => ({
     reserve,
-    balanceCents: movements.filter((move) => move.reserveId === reserve.id).reduce((sum, move) => sum + (move.type === 'deposit' ? move.amountCents : -move.amountCents), 0),
+    balanceCents: movements.filter((move) => move.reserveId === reserve.id).reduce((sum, move) => sum + (move.type === 'withdrawal' ? -move.amountCents : move.amountCents), 0),
   }));
 }
 
