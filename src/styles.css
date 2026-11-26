@@ -19,3 +19,5 @@
 .debtor-detail small,.debtor-detail span{font-size:9px;color:#8f859b}
 .debtor-detail-actions{display:flex;align-items:center;gap:8px}
 @media(max-width:700px){.quick-links{grid-template-columns:1fr 1fr}.debtor-detail{grid-template-columns:1fr}.debtor-detail-actions{justify-content:space-between}}
+
+.dashboard-comparison-chart{margin:0 0 16px}.dashboard-comparison-chart .recharts-cartesian-axis-tick text{font-size:10px}.debtor-payment-row{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-top:5px;border-top:1px solid #eee8f5;color:#81768f;font-size:9px}.debtor-payment-row .icon-button{flex-shrink:0}
