@@ -19,9 +19,19 @@ import {
   parseRateFile, payInvoice, processCdiAccruals, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveTransaction,
 } from './lib/operations';
 import type {
-  Account, Card, Category, Debtor, Investment, PageKey, Purchase, Reserve, Transaction,
+  Account,
+  Card,
+  Category,
+  Debtor,
+  Installment,
+  Investment,
+  InvoicePayment,
+  PageKey,
+  Purchase,
+  Reserve,
+  Transaction,
+  Transfer,
 } from './types';
-
 const navGroups: { title: string; items: { key: PageKey; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { title: 'VISÃO GERAL', items: [{ key: 'dashboard', label: 'Início', icon: LayoutDashboard }, { key: 'months', label: 'Meses', icon: CalendarRange }] },
   { title: 'MOVIMENTAÇÕES', items: [{ key: 'transactions', label: 'Movimentações', icon: ArrowLeftRight }, { key: 'categories', label: 'Categorias', icon: Layers3 }] },
