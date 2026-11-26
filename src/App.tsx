@@ -65,6 +65,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [ready, setReady] = useState(false);
   const [privacyNotice, setPrivacyNotice] = useState(false);
+  const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null);
   const [query, setQuery] = useState('');
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
@@ -92,15 +93,10 @@ export default function App() {
     return () => { active = false; };
   }, [revision]);
 
-  const act = async (action: () => Promise<unknown>, _successMessage?: string): Promise<boolean> => {
-    try {
-      await action();
-      refresh();
-      return true;
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Não foi possível concluir a operação.');
-      return false;
-    }
+  useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3200); return () => window.clearTimeout(timer); }, [toast]);
+  const act = async (action: () => Promise<unknown>, successMessage = 'Alterações salvas.'): Promise<boolean> => {
+    try { await action(); refresh(); setToast({ message: successMessage, kind: 'success' }); return true; }
+    catch (error) { setToast({ message: error instanceof Error ? error.message : 'Não foi possível concluir a operação.', kind: 'error' }); return false; }
   };
   const navigate = (key: PageKey) => { setPage(key); setMobileNav(false); };
   const common = { data: snapshot, month, setMonth, showValues, revision, refresh, act, query };
@@ -145,6 +141,7 @@ export default function App() {
         </div>
         <footer className="app-footer"><span>© {new Date().getFullYear()} Nexo</span><span><ShieldCheck size={13}/> Seus dados financeiros não saem do navegador.</span></footer>
       </main>
+      {toast && <div className={`action-toast ${toast.kind}`} role="status">{toast.kind === "success" ? <Check size={16}/> : <CircleHelp size={16}/>}<span>{toast.message}</span></div>}
       {privacyNotice && <div className="notice-banner"><div className="notice-icon"><ShieldCheck size={19}/></div><div><strong>Seus dados ficam no seu dispositivo</strong><p>O Nexo usa o armazenamento do navegador. Limpar os dados do site pode apagar suas informações. Faça backups periódicos em Configurações.</p></div><button className="btn btn-secondary btn-small" onClick={() => { void db.settings.put({ key: 'privacyNoticeDismissed', value: true }); setPrivacyNotice(false); }}>Entendi</button></div>}
     </div>
   );
@@ -274,6 +271,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     const categoryId = String(payload.get('categoryId') || '') || undefined;
     const notes = String(payload.get('notes') || '');
     const expenseClass = String(payload.get('status') || 'Essencial') as Transaction['expenseClass'];
+    if (editing?.paymentMode === 'card-credit') { setToast({ message: 'Para alterar uma compra parcelada, exclua o parcelamento atual e registre a compra novamente.', kind: 'error' }); return; }
     const ok = await act(() => paymentMode === 'card-credit'
       ? createCardPurchase({ description: String(payload.get('description') ?? ''), totalCents: toCents(raw), cardId: String(payload.get('cardId') || ''), installmentsCount: Number(payload.get('installmentsCount') || 1), purchaseDate: String(payload.get('date')), firstDueMonth: String(payload.get('firstDueMonth') || addMonths(String(payload.get('date')).slice(0, 7), 1)), categoryId, expenseClass, notes })
       : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, notes }),
@@ -302,7 +300,6 @@ function TransactionModal({ data, editing, onClose, onSubmit }: { data: Snapshot
   const onFormSubmit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); setSaving(true); try { await onSubmit(new FormData(e.currentTarget)); } finally { setSaving(false); } };
   return <Modal title={editing ? 'Editar movimentação' : 'Nova movimentação'} onClose={onClose}><form className="form-grid" onSubmit={onFormSubmit}>
     <Field label="Tipo"><select name="type" value={type} onChange={(e) => { const next = e.target.value as 'income' | 'expense'; setType(next); if (next === 'income' && mode === 'card-credit') setMode('pix'); }}><option value="expense">Despesa</option><option value="income">Receita</option></select></Field>
-    {type === 'expense' ? <Field label="Status"><select name="status" value={status} onChange={(e) => setStatus(e.target.value as NonNullable<Transaction['expenseClass']>)}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field> : <input type="hidden" name="status" value="received"/>}
     <Field label="Descrição" wide><input name="description" required defaultValue={editing?.description}/></Field>
     <Field label="Valor (R$)"><MoneyInput name="amount" required defaultValue={editing ? fromCents(editing.amountCents) : ''}/></Field>
     <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required value={purchaseDate} onChange={(e) => { setPurchaseDate(e.target.value); setFirstDueMonth(addMonths(e.target.value.slice(0, 7), 1)); }}/></Field>
