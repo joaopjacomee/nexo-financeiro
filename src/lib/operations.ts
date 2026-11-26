@@ -425,22 +425,27 @@ export async function exportBackup() {
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
     'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
-  const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 1, exportedAt: new Date().toISOString() };
+  const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 2, exportedAt: new Date().toISOString() };
   for (const table of tables) payload[table] = await db.table(table).toArray();
   return payload;
 }
 
 export async function restoreBackup(payload: unknown, replace = false) {
-  if (!payload || typeof payload !== 'object' || (payload as { app?: string }).app !== 'Nexo' || (payload as { schemaVersion?: number }).schemaVersion !== 1) {
+  if (!payload || typeof payload !== 'object' || (payload as { app?: string }).app !== 'Nexo') {
     throw new Error('Arquivo de backup inválido ou versão não suportada.');
   }
+  const schemaVersion = (payload as { schemaVersion?: number }).schemaVersion;
+  if (schemaVersion !== 1 && schemaVersion !== 2) throw new Error('Arquivo de backup inválido ou versão não suportada.');
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
-    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
   const data = payload as Record<string, unknown>;
-  for (const table of tables) if (!Array.isArray(data[table])) throw new Error(`Backup sem a coleção ${table}.`);
+  for (const table of tables) {
+    if (table === 'wishlistPurchases' && data[table] === undefined && schemaVersion === 1) data[table] = [];
+    if (!Array.isArray(data[table])) throw new Error(`Backup sem a coleção ${table}.`);
+  }
   await db.transaction('rw', tables.map((table) => db.table(table)), async () => {
     if (replace) for (const table of tables) await db.table(table).clear();
     for (const table of tables) {
