@@ -15,6 +15,7 @@ export const today = () => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 export const thisMonth = () => today().slice(0, 7);
+export const firstUsageMonth = () => thisMonth() < '2026-12' ? '2026-12' : thisMonth();
 export const makeId = () => crypto.randomUUID();
 export const monthOffset = (month: string, offset: number) => {
   const [year, m] = month.split('-').map(Number);
