@@ -14,15 +14,17 @@ import {
   getMonthSummary, getPatrimony, getReserveBalances,
 } from './lib/finance';
 import {
-  createCardPurchase, createDebtor, createTransfer, decryptBackup,
-  deleteTransaction, encryptBackup, exportBackup, moveReserve, payInvoice, processReserveYields,
-  receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction,
+  clearTestData, createCardPurchase, createDebtor, createTransfer, decryptBackup,
+  deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
+  deletePurchase, deleteReserve, deleteTransaction, deleteTransfer, encryptBackup, exportBackup, moveReserve,
+  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction,
 } from './lib/operations';
 import type {
   Account,
   Card,
   Category,
   Debtor,
+  DebtorPayment,
   Installment,
   InvoicePayment,
   PageKey,
@@ -190,6 +192,7 @@ function Dashboard({ data, month, setMonth, showValues, revision, navigate }: Co
       <StatCard label="Despesas e parcelas" value={money(expenses)} icon={ArrowUpRight} tone="pink" hidden={!showValues}/>
       <StatCard label="Saldo previsto do mês" value={money(summary?.freeCents ?? 0)} icon={Wallet} tone="lavender" hidden={!showValues}/>
     </div>
+    <Panel className="dashboard-comparison-chart"><PanelHeader title="Receitas x saídas" subtitle={monthBR(month)}/><ResponsiveContainer width="100%" height={260}><BarChart data={[{ name: monthBR(month), receita: (summary?.incomeCents ?? 0) / 100, saida: expenses / 100 }]} margin={{ top: 12, right: 18, bottom: 4, left: 8 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0eafa"/><XAxis dataKey="name" tick={{ fontSize: 11, fill: '#8f879d' }} axisLine={false} tickLine={false}/><YAxis tickFormatter={(value) => money(Number(value) * 100)} tick={{ fontSize: 10, fill: '#8f879d' }} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => money(Number(value) * 100)}/><Bar dataKey="receita" name="Receita" fill="#18a878" radius={[6, 6, 0, 0]}/><Bar dataKey="saida" name="Saída" fill="#df6686" radius={[6, 6, 0, 0]}/></BarChart></ResponsiveContainer></Panel>
     <div className="dashboard-grid">
       <Panel><PanelHeader title="Acesso rápido" subtitle="Abra a área que deseja organizar."/>
         <div className="quick-links">
@@ -252,12 +255,15 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const filtered = items.filter((item) => (typeFilter === 'all' || item.type === typeFilter) && (categoryFilter === 'all' || item.categoryId === categoryFilter) && (item.type === 'income' || statusFilter === 'all' || item.status === statusFilter) && `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase()));
   const submit = async (payload: FormData) => {
     const raw = String(payload.get('amount') ?? '');
-    const ok = await act(() => saveTransaction({
-      id: editing?.id, type: String(payload.get('type')) as 'income' | 'expense', description: String(payload.get('description') ?? ''),
-      amountCents: toCents(raw), date: String(payload.get('date')), categoryId: String(payload.get('categoryId') || '') || undefined,
-      status: String(payload.get('type')) === 'income' ? 'received' : String(payload.get('status')) as Transaction['status'], paymentMode: String(payload.get('paymentMode')) as Transaction['paymentMode'],
-      accountId: String(payload.get('accountId') || '') || undefined, notes: String(payload.get('notes') || ''),
-    }), editing ? 'Movimentação atualizada.' : 'Movimentação registrada.');
+    const type = String(payload.get('type')) as 'income' | 'expense';
+    const paymentMode = String(payload.get('paymentMode')) as Transaction['paymentMode'];
+    const categoryId = String(payload.get('categoryId') || '') || undefined;
+    const notes = String(payload.get('notes') || '');
+    const expenseClass = String(payload.get('expenseClass') || 'Essencial') as Transaction['expenseClass'];
+    const ok = await act(() => paymentMode === 'card-credit'
+      ? createCardPurchase({ description: String(payload.get('description') ?? ''), totalCents: toCents(raw), cardId: String(payload.get('cardId') || ''), installmentsCount: Number(payload.get('installmentsCount') || 1), purchaseDate: String(payload.get('date')), firstDueMonth: String(payload.get('firstDueMonth') || addMonths(String(payload.get('date')).slice(0, 7), 1)), categoryId, expenseClass, notes })
+      : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : String(payload.get('status')) as Transaction['status'], paymentMode, accountId: String(payload.get('accountId') || '') || undefined, notes }),
+      editing ? 'Movimentação atualizada.' : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
     if (ok) { setModal(false); setEditing(null); }
   };
   const accountName = (id?: string) => data.accounts.find((acc) => acc.id === id)?.name ?? '—';
@@ -278,20 +284,26 @@ function TransactionModal({ data, editing, onClose, onSubmit }: { data: Snapshot
   const [saving, setSaving] = useState(false);
   const onFormSubmit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); setSaving(true); try { await onSubmit(new FormData(e.currentTarget)); } finally { setSaving(false); } };
   return <Modal title={editing ? 'Editar movimentação' : 'Nova movimentação'} onClose={onClose}><form className="form-grid" onSubmit={onFormSubmit}>
-    <Field label="Tipo"><select name="type" value={type} onChange={(e) => setType(e.target.value as 'income' | 'expense')}><option value="expense">Despesa</option><option value="income">Receita</option></select></Field>
+    <Field label="Tipo"><select name="type" value={type} onChange={(e) => { const next = e.target.value as 'income' | 'expense'; setType(next); if (next === 'income' && mode === 'card-credit') setMode('pix'); }}><option value="expense">Despesa</option><option value="income">Receita</option></select></Field>
     {type === 'expense' ? <Field label="Status"><select name="status" value={status} onChange={(e) => setStatus(e.target.value as Transaction['status'])}><option value="paid">Pago</option><option value="received">Recebido</option><option value="pending">Pendente</option><option value="receivable">A receber</option><option value="cancelled">Cancelado</option></select></Field> : <input type="hidden" name="status" value="received"/>}
     <Field label="Descrição" wide><input name="description" required defaultValue={editing?.description}/></Field>
     <Field label="Valor (R$)"><input name="amount" required inputMode="decimal" placeholder="0,00" defaultValue={editing ? fromCents(editing.amountCents) : ''}/></Field>
-    <Field label="Data"><input name="date" type="date" required defaultValue={editing?.date ?? today()}/></Field>
+    <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required defaultValue={editing?.date ?? today()}/></Field>
     <Field label="Categoria"><select name="categoryId" defaultValue={editing?.categoryId ?? ''}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
-    <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option><option value="other">Outro</option></select></Field>
-    {mode !== 'other' && <Field label={mode === 'cash' ? 'Carteira de dinheiro' : 'Conta utilizada'}><select name="accountId" required defaultValue={editing?.accountId ?? (mode === 'cash' ? data.accounts.find((a) => a.type === 'cash')?.id : '')}><option value="">Selecione a conta</option>{data.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>}
+    {type === 'expense' && <Field label="Subcategoria da despesa"><select name="expenseClass" defaultValue={editing?.expenseClass ?? 'Essencial'}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>}
+    <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option>{type === 'expense' && <option value="card-credit">Cartão de crédito</option>}<option value="other">Outro</option></select></Field>
+    {mode === 'card-credit' && type === 'expense' && <>
+      <Field label="Cartão de crédito"><select name="cardId" required defaultValue={data.cards[0]?.id ?? ''}><option value="">Selecione o cartão</option>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
+      <Field label="Quantidade de parcelas"><input name="installmentsCount" type="number" min="1" max="240" defaultValue="1" required/></Field>
+      <Field label="Mês da primeira fatura"><input name="firstDueMonth" type="month" defaultValue={addMonths((editing?.date ?? today()).slice(0, 7), 1)} required/></Field>
+      <div className="form-footnote"><CreditCard size={15}/> A compra fica registrada na data informada. As parcelas vencem no dia de vencimento do cartão, a partir do mês da primeira fatura escolhido.</div>
+    </>}
+    {mode !== 'other' && mode !== 'card-credit' && <Field label={mode === 'cash' ? 'Carteira de dinheiro' : 'Conta utilizada'}><select name="accountId" required defaultValue={editing?.accountId ?? (mode === 'cash' ? data.accounts.find((a) => a.type === 'cash')?.id : '')}><option value="">Selecione a conta</option>{data.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>}
     <Field label="Observações" wide><textarea name="notes" rows={2} defaultValue={editing?.notes}/></Field>
-    <div className="form-footnote"><ShieldCheck size={15}/> Despesas de crédito devem ser cadastradas em Cartões para gerar parcelas e comprometer o limite corretamente.</div>
-    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Salvar movimentação'}</Button></div>
+    {mode !== 'card-credit' && <div className="form-footnote"><ShieldCheck size={15}/> Compras no crédito geram parcelas na data de vencimento da fatura do cartão.</div>}
+    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving || (mode === 'card-credit' && !data.cards.length)}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Salvar movimentação'}</Button></div>
   </form></Modal>;
 }
-
 function CategoriesPage({ data, refresh, act }: CommonProps) {
   const [name, setName] = useState(''); const [color, setColor] = useState('#8b5cf6'); const [editing, setEditing] = useState<Category | null>(null);
   const save = () => act(async () => { if (!name.trim()) throw new Error('Informe o nome da categoria.'); await db.categories.put({ id: editing?.id ?? makeId(), name: name.trim(), color, icon: editing?.icon ?? 'circle', sortOrder: editing?.sortOrder ?? data.categories.length }); setName(''); setEditing(null); }, 'Categoria salva.');
@@ -340,11 +352,10 @@ function CardModal({ data, editing, onClose, act }: { data: Snapshot; editing: C
   return <Modal title={editing ? 'Editar cartão' : 'Adicionar cartão'} onClose={onClose}><div className="form-grid"><Field label="Nome do cartão"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ex.: Cartão Inter"/></Field><Field label="Instituição"><select value={form.institution} onChange={(e) => setForm({ ...form, institution: e.target.value })}>{data.accounts.filter((a) => a.type !== 'cash' && a.institution !== 'Dinheiro').map((a) => <option key={a.id} value={a.institution}>{a.institution}</option>)}{!data.accounts.some((a) => a.type !== 'cash' && a.institution !== 'Dinheiro') && <option>Outra</option>}</select></Field><Field label="Tipo do cartão"><select value="credit" disabled><option value="credit">Crédito</option></select></Field><Field label="Bandeira"><select value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })}><option>Visa</option><option>Mastercard</option><option>Elo</option><option>American Express</option><option>Não informada</option></select></Field><Field label="Limite total (R$)"><input value={form.limit} onChange={(e) => setForm({ ...form, limit: e.target.value })} placeholder="0,00"/></Field><Field label="Dia de fechamento"><input type="number" min="1" max="31" value={form.closingDay} onChange={(e) => setForm({ ...form, closingDay: e.target.value })}/></Field><Field label="Dia de vencimento"><input type="number" min="1" max="31" value={form.dueDay} onChange={(e) => setForm({ ...form, dueDay: e.target.value })}/></Field><Field label="Cor de identificação"><input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })}/></Field><div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit}>Salvar cartão</Button></div></div></Modal>;
 }
 function PurchaseModal({ data, onClose, act }: { data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
-  const [form, setForm] = useState({ description: '', total: '', cardId: data.cards[0]?.id ?? '', categoryId: '', purchaseDate: today(), firstDueMonth: firstUsageMonth(), installmentsCount: '1', notes: '' });
+  const [form, setForm] = useState({ description: '', total: '', cardId: data.cards[0]?.id ?? '', categoryId: '', expenseClass: 'Essencial' as NonNullable<Transaction['expenseClass']>, purchaseDate: today(), firstDueMonth: addMonths(today().slice(0, 7), 1), installmentsCount: '1', notes: '' });
   const submit = () => act(() => createCardPurchase({ ...form, totalCents: toCents(form.total), installmentsCount: Number(form.installmentsCount), categoryId: form.categoryId || undefined }), 'Compra e parcelas registradas.').then((ok) => { if (ok) onClose(); });
-  return <Modal title="Registrar compra no crédito" onClose={onClose}><div className="form-grid"><Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field><Field label="Valor total (R$)"><input value={form.total} onChange={(e) => setForm({ ...form, total: e.target.value })} placeholder="0,00"/></Field><Field label="Cartão"><select value={form.cardId} onChange={(e) => setForm({ ...form, cardId: e.target.value })}>{data.cards.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.institution}</option>)}</select></Field><Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}/></Field><Field label="Data da compra"><input type="date" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value })}/></Field><Field label="Mês da primeira fatura"><input type="month" value={form.firstDueMonth} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field><Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field><div className="form-footnote"><CreditCard size={15}/> Cada parcela será lançada no mês de vencimento. O saldo bancário só muda no pagamento da fatura.</div><div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!data.cards.length}>Criar parcelamento</Button></div></div></Modal>;
+  return <Modal title="Registrar compra no crédito" onClose={onClose}><div className="form-grid"><Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field><Field label="Valor total (R$)"><input value={form.total} onChange={(e) => setForm({ ...form, total: e.target.value })} placeholder="0,00"/></Field><Field label="Cartão"><select value={form.cardId} onChange={(e) => setForm({ ...form, cardId: e.target.value })}>{data.cards.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.institution}</option>)}</select></Field><Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}/></Field><Field label="Data da compra"><input type="date" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value, firstDueMonth: addMonths(e.target.value.slice(0, 7), 1) })}/></Field><Field label="Mês da primeira fatura"><input type="month" value={form.firstDueMonth} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field><Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label="Subcategoria da despesa"><select value={form.expenseClass} onChange={(e) => setForm({ ...form, expenseClass: e.target.value as NonNullable<Transaction['expenseClass']> })}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field><Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field><div className="form-footnote"><CreditCard size={15}/> A compra fica registrada no dia informado; cada parcela vence no dia de vencimento do cartão, no mês selecionado da primeira fatura e nos meses seguintes.</div><div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!data.cards.length}>Criar parcelamento</Button></div></div></Modal>;
 }
-
 function InvoicesPage({ data, month, setMonth, showValues, act, revision }: CommonProps) {
   const [payments, setPayments] = useState<InvoicePayment[]>([]);
   const [installments, setInstallments] = useState<Awaited<ReturnType<typeof getInstallmentsForMonth>>>([]);
