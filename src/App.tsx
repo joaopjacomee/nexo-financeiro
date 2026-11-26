@@ -309,7 +309,7 @@ function AccountsPage({ data, showValues, act, revision }: CommonProps) {
   return <><PageHeading eyebrow="SALDOS REAIS" title="Contas bancárias" description="Acompanhe o dinheiro efetivamente disponível em cada instituição." action={<div className="inline-actions"><Button variant="secondary" onClick={() => setModal('transfer')}><ArrowLeftRight size={16}/> Transferir</Button><Button onClick={() => setModal('account')}><Plus size={16}/> Nova conta</Button></div>}/><div className="account-cards-grid">{balances.map(({ account, balanceCents }) => <div className="bank-account-card" key={account.id}><div className="bank-card-top"><div className="bank-icon large"><Landmark size={19}/></div><span className="subtle-tag">{account.type === 'cash' ? 'DINHEIRO' : account.type.toUpperCase()}</span></div><strong>{account.name}</strong><small>{account.institution}</small><div className="bank-balance"><span>Saldo atual</span><b>{showValues ? money(balanceCents) : '••••••'}</b></div><div className="bank-initial">Saldo inicial: {showValues ? money(account.initialBalanceCents) : '••••'}</div><div className="bank-account-actions"><Button size="small" variant="secondary" onClick={() => { setEditingAccount(account); setModal('account'); }}>Editar</Button></div></div>)}</div><Panel><PanelHeader title="Histórico de transferências" subtitle="Transferências próprias não são consideradas receitas nem despesas."/><TransferHistory revision={revision} accounts={data.accounts} showValues={showValues}/></Panel>{modal === 'account' && <AccountModal editing={editingAccount} onClose={() => { setModal(null); setEditingAccount(null); }} act={act}/ >}{modal === 'transfer' && <Modal title="Transferir entre contas" onClose={() => setModal(null)}><div className="form-grid"><Field label="Conta de origem"><select value={transfer.fromAccountId} onChange={(e) => setTransfer({ ...transfer, fromAccountId: e.target.value })}><option value="">Selecione</option>{data.accounts.map((a) => <option value={a.id} key={a.id}>{a.name}</option>)}</select></Field><Field label="Conta de destino"><select value={transfer.toAccountId} onChange={(e) => setTransfer({ ...transfer, toAccountId: e.target.value })}><option value="">Selecione</option>{data.accounts.map((a) => <option value={a.id} key={a.id}>{a.name}</option>)}</select></Field><Field label="Valor (R$)"><input value={transfer.amount} onChange={(e) => setTransfer({ ...transfer, amount: e.target.value })} placeholder="0,00"/></Field><Field label="Data"><input type="date" value={transfer.date} onChange={(e) => setTransfer({ ...transfer, date: e.target.value })}/></Field><Field label="Descrição" wide><input value={transfer.description} onChange={(e) => setTransfer({ ...transfer, description: e.target.value })}/></Field><div className="form-footnote"><ArrowLeftRight size={15}/> O valor sai de uma conta e entra na outra sem criar receita ou despesa.</div><div className="form-actions"><Button variant="secondary" onClick={() => setModal(null)}>Cancelar</Button><Button onClick={saveTransfer}>Confirmar transferência</Button></div></div></Modal>}</>;
 }
 function TransferHistory({ revision, accounts, showValues }: { revision: number; accounts: Account[]; showValues: boolean }) {
-  const [items, setItems] = useState<Awaited<ReturnType<typeof db.transfers.toArray>>>([]);
+  const [items, setItems] = useState<Transfer[]>([]);
   useEffect(() => { db.transfers.orderBy('date').reverse().toArray().then(setItems); }, [revision]);
   return items.length ? <div className="table-scroll"><table><thead><tr><th>ORIGEM</th><th>DESTINO</th><th>DATA</th><th>VALOR</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{accounts.find((a) => a.id === item.fromAccountId)?.name ?? '—'}</td><td>{accounts.find((a) => a.id === item.toAccountId)?.name ?? '—'}</td><td>{dateBR(item.date)}</td><td>{showValues ? money(item.amountCents) : '••••'}</td></tr>)}</tbody></table></div> : <TableEmpty text="Nenhuma transferência registrada."/>;
 }
@@ -338,7 +338,7 @@ function PurchaseModal({ data, onClose, act }: { data: Snapshot; onClose: () => 
 }
 
 function InvoicesPage({ data, month, setMonth, showValues, act, revision }: CommonProps) {
-  const [payments, setPayments] = useState<Awaited<ReturnType<typeof db.invoicePayments.toArray>>>([]);
+  const [payments, setPayments] = useState<InvoicePayment[]>([]);
   const [installments, setInstallments] = useState<Awaited<ReturnType<typeof getInstallmentsForMonth>>>([]);
   const [modal, setModal] = useState(false);
   useEffect(() => { Promise.all([db.invoicePayments.where('month').equals(month).toArray(), getInstallmentsForMonth(month)]).then(([p, i]) => { setPayments(p); setInstallments(i); }); }, [month, revision]);
@@ -352,7 +352,7 @@ function InvoicePaymentModal({ data, month, onClose, act }: { data: Snapshot; mo
 }
 
 function InstallmentsPage({ data, month, setMonth, showValues, revision }: CommonProps) {
-  const [items, setItems] = useState<Awaited<ReturnType<typeof db.installments.toArray>>>([]);
+  const [items, setItems] = useState<Installment[]>([]);
   const [filter, setFilter] = useState('active');
   useEffect(() => { db.installments.toArray().then(setItems); }, [revision]);
   const purchases = new Map(data.purchases.map((purchase) => [purchase.id, purchase]));
