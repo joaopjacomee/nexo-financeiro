@@ -22,6 +22,8 @@ import type {
   Account,
   Card,
   Category,
+  CdiAccrual,
+  CdiRate,
   Debtor,
   Installment,
   Investment,
@@ -401,8 +403,8 @@ function ReserveMovementModal({ reserveId, type, data, onClose, act }: { reserve
 }
 
 function CdiPage({ data, showValues, act, revision }: CommonProps) {
-  const [rates, setRates] = useState<Awaited<ReturnType<typeof db.cdiRates.toArray>>>([]);
-  const [accruals, setAccruals] = useState<Awaited<ReturnType<typeof db.cdiAccruals.toArray>>>([]);
+  const [rates, setRates] = useState<CdiRate[]>([]);
+  const [accruals, setAccruals] = useState<CdiAccrual[]>([]);
   const [modal, setModal] = useState<'investment' | 'movement' | null>(null);
   const [selectedInvestment, setSelectedInvestment] = useState(data.investments[0]?.id ?? '');
   const [fileMessage, setFileMessage] = useState('');
