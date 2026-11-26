@@ -1,10 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FocusEvent, type FormEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent, type ReactNode } from 'react';
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, CalendarDays,
   CalendarRange, Check, ChevronLeft, ChevronRight, CreditCard, Download, Eye, EyeOff, FileBarChart,
   FileText, FolderOpen, Gauge, Goal, HandCoins, Landmark, Layers3, LayoutDashboard, Menu, Plus,
   Search, Settings, ShieldCheck, Smartphone, Target, TrendingDown, TrendingUp, Wallet, X, Upload,
-  PiggyBank, Receipt, CircleHelp, Trash2,
+  PiggyBank, Receipt, CircleHelp, Trash2, Undo2, Redo2, ShoppingBag,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
@@ -14,10 +14,10 @@ import {
   getMonthSummary, getPatrimony, getReserveBalances,
 } from './lib/finance';
 import {
-  clearTestData, createCardPurchase, createDebtor, createTransfer, decryptBackup,
+  clearTestData, createCardPurchase, createDebtor, createTransfer, createWishlistPurchase, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
-  deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, encryptBackup, exportBackup, moveReserve,
-  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction,
+  deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve,
+  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance,
 } from './lib/operations';
 import type {
   Account,
@@ -33,12 +33,13 @@ import type {
   ReserveMovement,
   Transaction,
   Transfer,
+  WishlistPurchase,
 } from './types';
 const navGroups: { title: string; items: { key: PageKey; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { title: 'VISÃO GERAL', items: [{ key: 'dashboard', label: 'Início', icon: LayoutDashboard }, { key: 'months', label: 'Meses', icon: CalendarRange }] },
   { title: 'MOVIMENTAÇÕES', items: [{ key: 'transactions', label: 'Movimentações', icon: ArrowLeftRight }, { key: 'categories', label: 'Categorias', icon: Layers3 }] },
   { title: 'CONTAS E CARTÕES', items: [{ key: 'accounts', label: 'Contas bancárias', icon: Landmark }, { key: 'cards', label: 'Cartões', icon: CreditCard }, { key: 'invoices', label: 'Faturas', icon: Receipt }, { key: 'installments', label: 'Parcelamentos', icon: CalendarDays }] },
-  { title: 'ORGANIZAÇÃO', items: [{ key: 'debtors', label: 'Devedores', icon: HandCoins }, { key: 'reserves', label: 'Caixinhas', icon: Goal }] },
+  { title: 'ORGANIZAÇÃO', items: [{ key: 'debtors', label: 'Devedores', icon: HandCoins }, { key: 'reserves', label: 'Caixinhas', icon: Goal }, { key: 'wishlist', label: 'Lista de desejo', icon: ShoppingBag }] },
   { title: 'ANÁLISES', items: [{ key: 'reports', label: 'Relatórios', icon: FileBarChart }, { key: 'calendar', label: 'Calendário', icon: CalendarDays }, { key: 'forecast', label: 'Previsões', icon: Activity }, { key: 'patrimony', label: 'Patrimônio', icon: Wallet }] },
   { title: 'SISTEMA', items: [{ key: 'settings', label: 'Configurações', icon: Settings }] },
 ];
@@ -46,7 +47,7 @@ const pageTitles: Record<PageKey, string> = {
   dashboard: 'Visão geral', months: 'Organização mensal', transactions: 'Movimentações', categories: 'Categorias',
   accounts: 'Contas bancárias', cards: 'Cartões', invoices: 'Faturas', installments: 'Parcelamentos', debtors: 'Devedores',
   reserves: 'Minhas caixinhas', reports: 'Relatórios', calendar: 'Calendário financeiro',
-  forecast: 'Previsão financeira', patrimony: 'Patrimônio', settings: 'Configurações',
+  forecast: 'Previsão financeira', patrimony: 'Patrimônio', settings: 'Configurações', wishlist: 'Lista de desejo',
 };
 const COLORS = ['#6d28d9', '#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe', '#ede9fe', '#7c3aed', '#5b21b6'];
 
@@ -55,6 +56,32 @@ interface Snapshot {
   debtors: Debtor[]; reserves: Reserve[]; months: { id: string; month: string }[];
 }
 const emptySnapshot: Snapshot = { categories: [], accounts: [], cards: [], transactions: [], purchases: [], debtors: [], reserves: [], months: [] };
+
+const HISTORY_TABLES = [
+  'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
+  'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
+  'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
+] as const;
+type HistoryTableName = typeof HISTORY_TABLES[number];
+type HistorySnapshot = Record<HistoryTableName, unknown[]>;
+
+async function captureHistorySnapshot(): Promise<HistorySnapshot> {
+  const entries = await Promise.all(HISTORY_TABLES.map(async (name) => [name, await db.table(name).toArray()] as const));
+  return Object.fromEntries(entries) as HistorySnapshot;
+}
+
+async function restoreHistorySnapshot(snapshot: HistorySnapshot) {
+  const tables = HISTORY_TABLES.map((name) => db.table(name));
+  await db.transaction('rw', ...tables, async () => {
+    for (const name of HISTORY_TABLES) {
+      const table = db.table(name);
+      await table.clear();
+      const records = snapshot[name] as any[];
+      if (records.length) await table.bulkPut(records);
+    }
+  });
+}
+
 
 export default function App() {
   const [page, setPage] = useState<PageKey>('dashboard');
@@ -67,6 +94,11 @@ export default function App() {
   const [privacyNotice, setPrivacyNotice] = useState(false);
   const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null);
   const [query, setQuery] = useState('');
+  const historyRef = useRef<{ before: HistorySnapshot; after: HistorySnapshot } | null>(null);
+  const historyPosition = useRef<'before' | 'after'>('after');
+  const historyBusy = useRef(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   useEffect(() => {
@@ -95,8 +127,54 @@ export default function App() {
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3200); return () => window.clearTimeout(timer); }, [toast]);
   const act = async (action: () => Promise<unknown>, successMessage = 'Alterações salvas.'): Promise<boolean> => {
-    try { await action(); refresh(); setToast({ message: successMessage, kind: 'success' }); return true; }
-    catch (error) { setToast({ message: error instanceof Error ? error.message : 'Não foi possível concluir a operação.', kind: 'error' }); return false; }
+    if (historyBusy.current) return false;
+    try {
+      const before = await captureHistorySnapshot();
+      await action();
+      const after = await captureHistorySnapshot();
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        historyRef.current = { before, after };
+        historyPosition.current = 'after';
+        setCanUndo(true);
+        setCanRedo(false);
+      }
+      refresh();
+      setToast({ message: successMessage, kind: 'success' });
+      return true;
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : 'Não foi possível concluir a operação.', kind: 'error' });
+      return false;
+    }
+  };
+  const undoLastAction = async () => {
+    const history = historyRef.current;
+    if (!history || historyPosition.current !== 'after' || historyBusy.current) return;
+    historyBusy.current = true;
+    try {
+      await restoreHistorySnapshot(history.before);
+      historyPosition.current = 'before';
+      setCanUndo(false);
+      setCanRedo(true);
+      refresh();
+      setToast({ message: 'Última ação desfeita.', kind: 'success' });
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : 'Não foi possível desfazer a ação.', kind: 'error' });
+    } finally { historyBusy.current = false; }
+  };
+  const redoLastAction = async () => {
+    const history = historyRef.current;
+    if (!history || historyPosition.current !== 'before' || historyBusy.current) return;
+    historyBusy.current = true;
+    try {
+      await restoreHistorySnapshot(history.after);
+      historyPosition.current = 'after';
+      setCanUndo(true);
+      setCanRedo(false);
+      refresh();
+      setToast({ message: 'Última ação refeita.', kind: 'success' });
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : 'Não foi possível refazer a ação.', kind: 'error' });
+    } finally { historyBusy.current = false; }
   };
   const navigate = (key: PageKey) => { setPage(key); setMobileNav(false); };
   const common = { data: snapshot, month, setMonth, showValues, revision, refresh, act, query };
@@ -120,7 +198,7 @@ export default function App() {
       <main className="main-area">
         <header className="topbar">
           <div className="topbar-left"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Abrir menu"><Menu size={20}/></button><div><div className="breadcrumb">ESPAÇO FINANCEIRO <ChevronRight size={12}/> <span>{pageTitles[page].toUpperCase()}</span></div><h1>{pageTitles[page]}</h1></div></div>
-          <div className="topbar-actions"><div className="privacy-status"><span className="privacy-dot"/> Somente neste dispositivo</div><button className="icon-button" onClick={() => setShowValues((value) => !value)} title={showValues ? 'Ocultar valores' : 'Mostrar valores'}>{showValues ? <Eye size={18}/> : <EyeOff size={18}/>}</button><button className="icon-button" onClick={() => navigate('settings')} title="Configurações"><Settings size={18}/></button><div className="top-avatar">NP</div></div>
+          <div className="topbar-actions"><div className="privacy-status"><span className="privacy-dot"/> Somente neste dispositivo</div><button className="icon-button history-action" onClick={() => void undoLastAction()} disabled={!canUndo} title="Desfazer última ação" aria-label="Desfazer última ação"><Undo2 size={18}/></button><button className="icon-button history-action" onClick={() => void redoLastAction()} disabled={!canRedo} title="Refazer última ação" aria-label="Refazer última ação"><Redo2 size={18}/></button><button className="icon-button" onClick={() => setShowValues((value) => !value)} title={showValues ? 'Ocultar valores' : 'Mostrar valores'}>{showValues ? <Eye size={18}/> : <EyeOff size={18}/>}</button><button className="icon-button" onClick={() => navigate('settings')} title="Configurações"><Settings size={18}/></button><div className="top-avatar">NP</div></div>
         </header>
         <div className="page-content">
           {page === 'dashboard' && <Dashboard {...common} navigate={navigate}/>}
@@ -133,6 +211,7 @@ export default function App() {
           {page === 'installments' && <InstallmentsPage {...common}/>}
           {page === 'debtors' && <DebtorsPage {...common}/>}
           {page === 'reserves' && <ReservesPage {...common}/>}
+          {page === 'wishlist' && <WishlistPage {...common}/>}
           {page === 'reports' && <ReportsPage {...common}/>}
           {page === 'calendar' && <CalendarPage {...common}/>}
           {page === 'forecast' && <ForecastPage {...common}/>}
@@ -142,7 +221,7 @@ export default function App() {
         <footer className="app-footer"><span>© {new Date().getFullYear()} Nexo</span><span><ShieldCheck size={13}/> Seus dados financeiros não saem do navegador.</span></footer>
       </main>
       {toast && <div className={`action-toast ${toast.kind}`} role="status">{toast.kind === "success" ? <Check size={16}/> : <CircleHelp size={16}/>}<span>{toast.message}</span></div>}
-      {privacyNotice && <div className="notice-banner"><div className="notice-icon"><ShieldCheck size={19}/></div><div><strong>Seus dados ficam no seu dispositivo</strong><p>O Nexo usa o armazenamento do navegador. Limpar os dados do site pode apagar suas informações. Faça backups periódicos em Configurações.</p></div><button className="btn btn-secondary btn-small" onClick={() => { void db.settings.put({ key: 'privacyNoticeDismissed', value: true }); setPrivacyNotice(false); }}>Entendi</button></div>}
+      {privacyNotice && <div className="notice-banner"><div className="notice-icon"><ShieldCheck size={19}/></div><div><strong>Seus dados ficam no seu dispositivo</strong><p>O Nexo usa o armazenamento do navegador. Limpar os dados do site pode apagar suas informações. Faça backups periódicos em Configurações.</p></div><button className="btn btn-secondary btn-small" onClick={() => { void act(() => db.settings.put({ key: 'privacyNoticeDismissed', value: true }), 'Aviso dispensado.'); setPrivacyNotice(false); }}>Entendi</button></div>}
     </div>
   );
 }
@@ -609,7 +688,7 @@ function PatrimonyPage({ showValues, revision }: CommonProps) {
   return <><PageHeading eyebrow="VISÃO CONSOLIDADA" title="Patrimônio financeiro" description="Uma visão consolidada do que você possui, do que tem a receber e dos compromissos em aberto."/><div className="patrimony-hero"><span>Patrimônio líquido estimado</span><strong>{showValues ? money(data?.netWorth ?? 0) : '••••••'}</strong><small>Contas + investimentos + valores a receber − compromissos de cartão</small></div><div className="stat-grid stat-grid-three"><StatCard label="Saldos bancários" value={money(data?.cash ?? 0)} icon={Landmark} hidden={!showValues}/><StatCard label="Investimentos" value={money(data?.investmentsTotal ?? 0)} icon={TrendingUp} tone="green" hidden={!showValues}/><StatCard label="Valores a receber" value={money(data?.receivable ?? 0)} icon={HandCoins} tone="lavender" hidden={!showValues}/><StatCard label="Compromissos de cartão" value={money(data?.cardCommitments ?? 0)} icon={CreditCard} tone="pink" hidden={!showValues}/><StatCard label="Dinheiro reservado" value={money(data?.reserved ?? 0)} icon={PiggyBank} hidden={!showValues}/><StatCard label="Dinheiro livre em contas" value={money(data?.freeCash ?? 0)} icon={Wallet} hidden={!showValues}/></div><Panel><PanelHeader title="Composição do patrimônio" subtitle="As caixinhas são uma parte dos saldos bancários, portanto não são somadas novamente."/><div className="composition-list">{[{ label: 'Saldos em contas', amount: data?.cash ?? 0, color: '#7c3aed' }, { label: 'Investimentos CDI', amount: data?.investmentsTotal ?? 0, color: '#a78bfa' }, { label: 'Valores a receber', amount: data?.receivable ?? 0, color: '#c4b5fd' }, { label: 'Compromissos de cartão', amount: -(data?.cardCommitments ?? 0), color: '#ec4899' }].map((item) => <div className="composition-row" key={item.label}><span><i style={{ background: item.color }}/>{item.label}</span><strong className={item.amount < 0 ? 'negative' : ''}>{showValues ? money(item.amount) : '••••'}</strong></div>)}</div></Panel></>;
 }
 
-function SettingsPage({ refresh, act }: CommonProps) {
+function SettingsPage({ act }: CommonProps) {
   const [message, setMessage] = useState('');
   const [password, setPassword] = useState('');
   const exportFile = async (encrypted: boolean) => {
@@ -627,7 +706,8 @@ function SettingsPage({ refresh, act }: CommonProps) {
       let payload = parsed;
       if (parsed && typeof parsed === 'object' && (parsed as { format?: string }).format === 'NEXO-AES-GCM-1') payload = await decryptBackup(parsed as { format: string; salt: string; iv: string; data: string }, password);
       
-      await restoreBackup(payload, false); refresh(); setMessage('Backup restaurado sem duplicar registros já existentes.');
+      const ok = await act(() => restoreBackup(payload, false), 'Backup restaurado sem duplicar registros já existentes.');
+      if (ok) setMessage('Backup restaurado sem duplicar registros já existentes.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Arquivo inválido ou senha incorreta.'); }
   };
   return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/><div className="settings-grid"><Panel><div className="settings-icon purple"><Download size={20}/></div><h3>Backup dos dados</h3><p>Exporte suas informações em JSON para guardar uma cópia completa das contas, movimentações, cartões, parcelas, devedores, reservas e CDI.</p><div className="settings-actions"><Button onClick={() => void exportFile(false)}><Download size={15}/> Exportar JSON</Button></div></Panel><Panel><div className="settings-icon green"><ShieldCheck size={20}/></div><h3>Backup criptografado</h3><p>Use uma senha para proteger o arquivo com AES-GCM e derivação de chave PBKDF2. A senha não é salva pelo Nexo.</p><Field label="Senha (mínimo 8 caracteres)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Defina uma senha forte"/></Field><div className="settings-actions"><Button variant="secondary" onClick={() => void exportFile(true)} disabled={password.length < 8}>Exportar criptografado</Button></div></Panel><Panel><div className="settings-icon lavender"><Upload size={20}/></div><h3>Restaurar backup</h3><p>Importe um JSON exportado pelo Nexo. A restauração mescla registros e evita duplicatas por identificador.</p><Field label="Senha do backup criptografado (se aplicável)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)}/></Field><label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(e) => void importFile(e.target.files?.[0])}/></label></Panel><Panel><div className="settings-icon pink"><Smartphone size={20}/></div><h3>Privacidade e armazenamento</h3><p>Seus dados ficam no IndexedDB deste navegador e não são enviados para um servidor. O armazenamento local não é automaticamente criptografado.</p><ul className="settings-list"><li>Não armazene senhas bancárias ou números completos de cartões.</li><li>Limpar os dados do navegador pode apagar suas informações.</li><li>Faça backups periódicos e guarde uma cópia fora do dispositivo.</li><li>O modo offline depende do primeiro carregamento completo da aplicação.</li></ul></Panel></div><Panel><div className="settings-icon pink"><Trash2 size={20}/></div><h3>Apagar dados de teste</h3><p>Remove os registros deste navegador e recria apenas os cadastros iniciais vazios. Faça um backup antes, caso queira conservar alguma informação.</p><div className="settings-actions"><Button variant="danger" onClick={() => { void act(() => clearTestData(), 'Os dados de teste foram apagados e os cadastros vazios foram recriados.'); }}>Apagar todos os dados</Button></div></Panel>{message && <div className="info-note"><Check size={17}/><span>{message}</span><button className="icon-button mini" onClick={() => setMessage('')}><X size={14}/></button></div>}<Panel className="about-panel"><PanelHeader title="Sobre o Nexo"/><div className="about-grid"><div><span>Versão</span><strong>1.0.0</strong></div><div><span>Banco de dados</span><strong>IndexedDB · Dexie.js</strong></div><div><span>Hospedagem</span><strong>GitHub Pages</strong></div><div><span>Arquitetura</span><strong>100% navegador</strong></div></div></Panel></>;
