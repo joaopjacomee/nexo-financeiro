@@ -168,13 +168,13 @@ export async function createCardPurchase(input: {
 }
 
 export async function payInvoice(input: { cardId: string; accountId: string; month: string; amountCents: number; date: string }) {
-  if (input.month < FINANCIAL_START_MONTH) throw new Error('O controle de faturas começa em dezembro de 2026.');
+  if (input.month < FINANCIAL_START_MONTH || input.date < `${FINANCIAL_START_MONTH}-01`) throw new Error('O controle de faturas começa em dezembro de 2026.');
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor de pagamento válido.');
   const card = await db.cards.get(input.cardId);
   const account = await db.accounts.get(input.accountId);
   if (!card || !account) throw new Error('Selecione um cartão e uma conta válidos.');
   const pending = (await db.installments.where('cardId').equals(input.cardId).toArray())
-    .filter((item) => item.dueMonth <= input.month && item.paidCents < item.amountCents)
+    .filter((item) => item.dueMonth >= FINANCIAL_START_MONTH && item.dueMonth <= input.month && item.paidCents < item.amountCents)
     .sort((a, b) => a.dueMonth.localeCompare(b.dueMonth) || a.number - b.number);
   const { allocations, remainingCents } = allocateInvoicePayment(pending, input.amountCents);
   if (remainingCents > 0) throw new Error('O pagamento é maior que as parcelas em aberto até o mês selecionado. Confira o valor e as faturas anteriores.');
