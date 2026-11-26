@@ -57,3 +57,16 @@
 .multi-filter-option input{accent-color:#7c3aed;width:14px;height:14px;margin:0}
 @media(max-width:700px){.filter-selects{display:grid;grid-template-columns:1fr 1fr;gap:8px}.multi-filter{min-width:0}.multi-filter-menu{min-width:180px;max-width:calc(100vw - 40px)}}
 @media(max-width:390px){.filter-selects{grid-template-columns:1fr}.multi-filter summary{padding:9px 10px}}
+
+/* Reserve cards keep consistent spacing and align their action rows. */
+.reserve-grid{align-items:stretch;grid-auto-rows:1fr}
+.reserve-card{height:100%;padding:18px;gap:12px}
+.reserve-card-top{min-height:38px}
+.reserve-card h3{display:flex;align-items:center;min-height:36px;margin:0;line-height:1.35}
+.reserve-amount{min-height:27px}
+.reserve-progress-text{gap:8px;align-items:center}
+.reserve-progress-text span:last-child{text-align:right}
+.reserve-yield-label{margin-top:0;line-height:1.4}
+.reserve-actions{margin-top:auto;padding-top:12px;gap:8px}
+.reserve-actions .btn{min-height:34px}
+@media(max-width:700px){.reserve-grid{grid-auto-rows:auto}.reserve-card{height:auto;padding:16px}.reserve-card h3{min-height:0}}
