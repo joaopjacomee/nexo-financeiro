@@ -631,7 +631,7 @@ export async function clearTestData() {
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
-    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
   await db.transaction('rw', tables.map((name) => db.table(name)), async () => {
     for (const name of tables) await db.table(name).clear();
