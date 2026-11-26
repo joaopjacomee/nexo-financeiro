@@ -6,3 +6,16 @@
 @media print{body{background:#fff}.sidebar,.topbar,.app-footer,.mobile-scrim,.notice-banner,.btn,.icon-button,.month-selector{display:none!important}.main-area{margin:0}.page-content{padding:0;max-width:none}.panel,.stat-card{box-shadow:none;break-inside:avoid}.page-heading{margin-top:0}.table-scroll{overflow:visible}.table-scroll table{min-width:0;white-space:normal}thead th,tbody td{font-size:8pt;padding:6px;border-color:#ddd}.stat-grid{grid-template-columns:repeat(3,1fr)}}
 .month-history-chips{display:flex;gap:7px;overflow-x:auto;padding:1px 0 13px}.month-history-chips button{border:1px solid #ebe4f3;background:#fff;color:#887f93;border-radius:8px;padding:7px 10px;font-size:9px;font-weight:700;white-space:nowrap}.month-history-chips button.active{background:#f0e9ff;color:#622caf;border-color:#e4d8f8}
 .bank-account-actions{display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid #f3eff7}.dashboard-secondary-stats{margin-top:-3px}
+
+/* Nexo refinements */
+.bank-brand-icon img{width:25px;height:25px;object-fit:contain;display:block}
+.bank-brand-icon.large img{width:31px;height:31px}
+.quick-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.quick-links .btn{justify-content:flex-start}
+.reserve-yield-label{font-size:10px;color:#8f859b;margin-top:10px}
+.debtor-details-list{padding:5px 0}
+.debtor-detail{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:10px;margin:5px 0;background:#faf8fd;border-radius:9px;white-space:normal}
+.debtor-detail-main,.debtor-detail-values{display:flex;flex-direction:column;gap:4px}
+.debtor-detail small,.debtor-detail span{font-size:9px;color:#8f859b}
+.debtor-detail-actions{display:flex;align-items:center;gap:8px}
+@media(max-width:700px){.quick-links{grid-template-columns:1fr 1fr}.debtor-detail{grid-template-columns:1fr}.debtor-detail-actions{justify-content:space-between}}
