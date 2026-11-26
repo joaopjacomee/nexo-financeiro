@@ -3,7 +3,7 @@ import { firstUsageMonth } from './format';
 import type {
   Account, Card, Category, CdiAccrual, CdiRate, Debtor, DebtorPayment, Installment, Investment,
   InvestmentMovement, InvoicePayment, MonthRecord, MonthlyBudget, Purchase, Reserve, ReserveMovement,
-  Setting, Transaction, Transfer,
+  Setting, Transaction, Transfer, WishlistPurchase,
 } from '../types';
 
 class NexoDatabase extends Dexie {
@@ -26,6 +26,7 @@ class NexoDatabase extends Dexie {
   cdiRates!: Table<CdiRate, string>;
   cdiAccruals!: Table<CdiAccrual, string>;
   settings!: Table<Setting, string>;
+  wishlistPurchases!: Table<WishlistPurchase, string>;
 
   constructor() {
     super('NexoFinanceiro');
@@ -49,6 +50,10 @@ class NexoDatabase extends Dexie {
       cdiRates: 'id, date',
       cdiAccruals: 'id, investmentId, date, [investmentId+date]',
       settings: 'key',
+    });
+    this.version(2).stores({
+      debtors: 'id, person, dueDate, linkedTransactionId, categoryId, originAccountId, sharedExpenseId, sharedPurchaseId',
+      wishlistPurchases: 'id, date',
     });
   }
 }
