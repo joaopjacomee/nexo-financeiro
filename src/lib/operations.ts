@@ -16,6 +16,10 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
 }
 
 export async function deleteTransaction(id: string) {
+  const debtor = await db.debtors.filter((item) => item.linkedTransactionId === id).first();
+  if (debtor) return deleteDebtor(debtor.id);
+  const payment = await db.debtorPayments.filter((item) => item.linkedTransactionId === id).first();
+  if (payment) return deleteDebtorPayment(payment.id);
   await db.transactions.delete(id);
 }
 
@@ -401,13 +405,7 @@ export async function deleteDebtorPayment(paymentId: string) {
   });
 }
 
-export async function deleteTransaction(id: string) {
-  const debtor = await db.debtors.filter((item) => item.linkedTransactionId === id).first();
-  if (debtor) return deleteDebtor(debtor.id);
-  const payment = await db.debtorPayments.filter((item) => item.linkedTransactionId === id).first();
-  if (payment) return deleteDebtorPayment(payment.id);
-  await db.transactions.delete(id);
-}
+
 
 export async function deletePurchase(purchaseId: string) {
   const installments = await db.installments.where('purchaseId').equals(purchaseId).toArray();
