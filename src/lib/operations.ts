@@ -237,7 +237,7 @@ export async function restoreBackup(payload: unknown, replace = false) {
   ] as const;
   const data = payload as Record<string, unknown>;
   for (const table of tables) if (!Array.isArray(data[table])) throw new Error(`Backup sem a coleção ${table}.`);
-  await db.transaction('rw', ...tables.map((table) => db.table(table)), async () => {
+  await db.transaction('rw', tables.map((table) => db.table(table)), async () => {
     if (replace) for (const table of tables) await db.table(table).clear();
     for (const table of tables) {
       const rows = data[table] as Record<string, unknown>[];
