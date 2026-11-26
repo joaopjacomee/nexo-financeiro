@@ -27,7 +27,7 @@ export async function getAccountBalances(): Promise<AccountBalance[]> {
       if (transfer.fromAccountId === account.id) balance -= transfer.amountCents;
       if (transfer.toAccountId === account.id) balance += transfer.amountCents;
     }
-    for (const payment of debtorPayments) if (payment.accountId === account.id) balance += payment.amountCents;
+    for (const payment of debtorPayments) if (payment.accountId === account.id && !payment.linkedTransactionId) balance += payment.amountCents;
     for (const payment of invoicePayments) if (payment.accountId === account.id) balance -= payment.amountCents;
     for (const movement of investmentMovements) {
       if (movement.accountId !== account.id) continue;
