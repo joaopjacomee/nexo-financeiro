@@ -9,7 +9,7 @@ import {
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
 import { dateBR, firstUsageMonth, fromCents, makeId, money, monthBR, today, toCents } from './lib/format';
-import { FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod } from './lib/calculations';
+import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod } from './lib/calculations';
 import {
   getAccountBalances, getCardMetrics, getCategorySpend, getDebtorMetrics, getInstallmentsForMonth,
   getMonthSummary, getPatrimony, getReserveBalances,
