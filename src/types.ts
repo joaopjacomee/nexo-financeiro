@@ -1,5 +1,6 @@
 export type ID = string;
 export type TxStatus = 'paid' | 'pending' | 'received' | 'receivable' | 'cancelled';
+export type ExpenseClass = 'Investimento' | 'Essencial' | 'Supérfluo';
 export type AccountType = 'checking' | 'savings' | 'cash' | 'payment' | 'other';
 
 export interface Category {
@@ -13,11 +14,11 @@ export interface Card {
 }
 export interface Transaction {
   id: ID; type: 'income' | 'expense'; description: string; amountCents: number; date: string; month: string;
-  categoryId?: ID; status: TxStatus; paymentMode: 'pix' | 'cash' | 'card-debit' | 'other';
+  categoryId?: ID; expenseClass?: ExpenseClass; status: TxStatus; paymentMode: 'pix' | 'cash' | 'card-debit' | 'card-credit' | 'other';
   accountId?: ID; notes?: string; createdAt: string;
 }
 export interface Purchase {
-  id: ID; description: string; totalCents: number; cardId: ID; categoryId?: ID; purchaseDate: string;
+  id: ID; description: string; totalCents: number; cardId: ID; categoryId?: ID; expenseClass?: ExpenseClass; purchaseDate: string;
   firstDueMonth: string; installmentsCount: number; createdAt: string; notes?: string;
 }
 export interface Installment {
@@ -32,10 +33,10 @@ export interface Transfer {
 }
 export interface Debtor {
   id: ID; person: string; description: string; originalCents: number; originDate: string; dueDate?: string;
-  categoryId?: ID; originalPayment?: string; notes?: string; linkedTransactionId?: ID; createdAt: string;
+  categoryId?: ID; originalPayment?: string; originAccountId?: ID; notes?: string; linkedTransactionId?: ID; createdAt: string;
 }
 export interface DebtorPayment {
-  id: ID; debtorId: ID; accountId: ID; amountCents: number; date: string; notes?: string;
+  id: ID; debtorId: ID; accountId: ID; amountCents: number; date: string; linkedTransactionId?: ID; notes?: string;
 }
 export interface Reserve {
   id: ID; name: string; targetCents: number; createdAt: string; targetDate?: string; notes?: string; closed?: boolean;
