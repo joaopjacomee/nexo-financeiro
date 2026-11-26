@@ -64,7 +64,8 @@ export function calculateFreeCashCents(
 /** A withdrawal releases only the part of the reserve that was funded by new deposits. */
 export function calculateReserveWithdrawalImpactCents(withdrawalCents: number, countedReserveCents: number): number {
   if (!Number.isSafeInteger(withdrawalCents) || withdrawalCents < 0) throw new Error('Valor de retirada inválido.');
-  return -Math.min(withdrawalCents, Math.max(0, countedReserveCents));
+  const releasedCents = Math.min(withdrawalCents, Math.max(0, countedReserveCents));
+  return releasedCents === 0 ? 0 : -releasedCents;
 }
 
 /** Wishlist spending is independent from cash, investments, and patrimony. */
