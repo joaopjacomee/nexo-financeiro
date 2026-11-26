@@ -44,6 +44,11 @@ export interface Reserve {
 }
 export interface ReserveMovement {
   id: ID; reserveId: ID; type: 'deposit' | 'withdrawal' | 'yield'; amountCents: number; date: string; notes?: string;
+  /** Only the amount added to the reserve after this feature was enabled affects free bank cash. */
+  availableBalanceImpactCents?: number;
+}
+export interface WishlistPurchase {
+  id: ID; description: string; amountCents: number; date: string; notes?: string; createdAt: string;
 }
 export interface MonthlyBudget { id: ID; month: string; categoryId: ID; budgetCents: number; }
 export interface MonthRecord { id: string; month: string; createdAt: string; }
@@ -58,4 +63,4 @@ export interface CdiRate { id: string; date: string; annualRate: number; source:
 export interface CdiAccrual { id: string; investmentId: ID; date: string; rateDaily: number; amountCents: number; balanceAfterCents: number; }
 export interface Setting { key: string; value: unknown; }
 
-export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'calendar' | 'forecast' | 'patrimony' | 'settings';
+export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'calendar' | 'forecast' | 'patrimony' | 'settings' | 'wishlist';
