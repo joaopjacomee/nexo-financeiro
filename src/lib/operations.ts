@@ -49,7 +49,7 @@ export async function createCardPurchase(input: {
   if (!card) throw new Error('Cartão não encontrado.');
   const committed = await db.installments.where('cardId').equals(card.id).toArray();
   const currentCommitment = committed.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
-  if (input.totalCents + currentCommitment > card.limitCents) {
+  if (card.limitCents > 0 && input.totalCents + currentCommitment > card.limitCents) {
     throw new Error(`A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ${((card.limitCents - currentCommitment) / 100).toFixed(2)}.`);
   }
   const purchaseId = makeId();
