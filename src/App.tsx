@@ -16,7 +16,7 @@ import {
 import {
   clearTestData, createCardPurchase, createDebtor, createTransfer, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
-  deletePurchase, deleteReserve, deleteTransaction, deleteTransfer, encryptBackup, exportBackup, moveReserve,
+  deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, encryptBackup, exportBackup, moveReserve,
   payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction,
 } from './lib/operations';
 import type {
@@ -30,6 +30,7 @@ import type {
   PageKey,
   Purchase,
   Reserve,
+  ReserveMovement,
   Transaction,
   Transfer,
 } from './types';
@@ -269,7 +270,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const accountName = (id?: string) => data.accounts.find((acc) => acc.id === id)?.name ?? '—';
   return <>
     <PageHeading eyebrow="LANÇAMENTOS" title="Entradas e saídas em um só lugar" description="Registre, pesquise e acompanhe suas movimentações financeiras." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><Button onClick={() => { setEditing(null); setModal(true); }}><Plus size={16}/> Nova movimentação</Button></div>}/>
-    <Panel><div className="filter-toolbar"><div className="search-box"><Search size={16}/><input placeholder="Buscar descrição..." value={search} onChange={(e) => setSearch(e.target.value)}/></div><div className="filter-selects"><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="all">Todos os tipos</option><option value="income">Receitas</option><option value="expense">Despesas</option></select><select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}><option value="all">Todas as categorias</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="all">Todos os status</option><option value="paid">Pago</option><option value="received">Recebido</option><option value="pending">Pendente</option><option value="receivable">A receber</option><option value="cancelled">Cancelado</option></select></div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>STATUS</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <StatusPill status={item.status}/>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { if (confirm('Excluir esta movimentação?')) void act(() => deleteTransaction(item.id)); }}><X size={14}/></button></div></td></tr>)}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
+    <Panel><div className="filter-toolbar"><div className="search-box"><Search size={16}/><input placeholder="Buscar descrição..." value={search} onChange={(e) => setSearch(e.target.value)}/></div><div className="filter-selects"><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="all">Todos os tipos</option><option value="income">Receitas</option><option value="expense">Despesas</option></select><select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}><option value="all">Todas as categorias</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="all">Todos os status</option><option value="paid">Pago</option><option value="received">Recebido</option><option value="pending">Pendente</option><option value="receivable">A receber</option><option value="cancelled">Cancelado</option></select></div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>STATUS</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}</div>{item.expenseClass && <small className="subline">{item.expenseClass}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <StatusPill status={item.status}/>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { if (confirm('Excluir esta movimentação?')) void act(() => deleteTransaction(item.id)); }}><X size={14}/></button></div></td></tr>)}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
     {modal && <TransactionModal data={data} editing={editing} onClose={() => { setModal(false); setEditing(null); }} onSubmit={submit}/>}
   </>;
 }
@@ -278,9 +279,12 @@ function StatusPill({ status }: { status: Transaction['status'] }) {
   return <span className={`status-pill status-${status}`}>{map[status]}</span>;
 }
 function TransactionModal({ data, editing, onClose, onSubmit }: { data: Snapshot; editing: Transaction | null; onClose: () => void; onSubmit: (form: FormData) => Promise<void> }) {
+  const initialDate = editing?.date ?? today();
   const [type, setType] = useState<'income' | 'expense'>(editing?.type ?? 'expense');
   const [mode, setMode] = useState<Transaction['paymentMode']>(editing?.paymentMode ?? 'pix');
   const [status, setStatus] = useState<Transaction['status']>(editing?.status ?? 'paid');
+  const [purchaseDate, setPurchaseDate] = useState(initialDate);
+  const [firstDueMonth, setFirstDueMonth] = useState(addMonths(initialDate.slice(0, 7), 1));
   const [saving, setSaving] = useState(false);
   const onFormSubmit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); setSaving(true); try { await onSubmit(new FormData(e.currentTarget)); } finally { setSaving(false); } };
   return <Modal title={editing ? 'Editar movimentação' : 'Nova movimentação'} onClose={onClose}><form className="form-grid" onSubmit={onFormSubmit}>
@@ -288,19 +292,19 @@ function TransactionModal({ data, editing, onClose, onSubmit }: { data: Snapshot
     {type === 'expense' ? <Field label="Status"><select name="status" value={status} onChange={(e) => setStatus(e.target.value as Transaction['status'])}><option value="paid">Pago</option><option value="received">Recebido</option><option value="pending">Pendente</option><option value="receivable">A receber</option><option value="cancelled">Cancelado</option></select></Field> : <input type="hidden" name="status" value="received"/>}
     <Field label="Descrição" wide><input name="description" required defaultValue={editing?.description}/></Field>
     <Field label="Valor (R$)"><input name="amount" required inputMode="decimal" placeholder="0,00" defaultValue={editing ? fromCents(editing.amountCents) : ''}/></Field>
-    <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required defaultValue={editing?.date ?? today()}/></Field>
+    <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required value={purchaseDate} onChange={(e) => { setPurchaseDate(e.target.value); setFirstDueMonth(addMonths(e.target.value.slice(0, 7), 1)); }}/></Field>
     <Field label="Categoria"><select name="categoryId" defaultValue={editing?.categoryId ?? ''}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
     {type === 'expense' && <Field label="Subcategoria da despesa"><select name="expenseClass" defaultValue={editing?.expenseClass ?? 'Essencial'}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>}
     <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option>{type === 'expense' && <option value="card-credit">Cartão de crédito</option>}<option value="other">Outro</option></select></Field>
     {mode === 'card-credit' && type === 'expense' && <>
       <Field label="Cartão de crédito"><select name="cardId" required defaultValue={data.cards[0]?.id ?? ''}><option value="">Selecione o cartão</option>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
       <Field label="Quantidade de parcelas"><input name="installmentsCount" type="number" min="1" max="240" defaultValue="1" required/></Field>
-      <Field label="Mês da primeira fatura"><input name="firstDueMonth" type="month" defaultValue={addMonths((editing?.date ?? today()).slice(0, 7), 1)} required/></Field>
-      <div className="form-footnote"><CreditCard size={15}/> A compra fica registrada na data informada. As parcelas vencem no dia de vencimento do cartão, a partir do mês da primeira fatura escolhido.</div>
+      <Field label="Mês da primeira fatura"><input name="firstDueMonth" type="month" value={firstDueMonth} onChange={(e) => setFirstDueMonth(e.target.value)} required/></Field>
+      <div className="form-footnote"><CreditCard size={15}/> A compra fica registrada na data informada. A primeira fatura começa automaticamente no mês seguinte; ajuste-a caso o cartão ainda feche no mês da compra. As parcelas vencem no dia de vencimento cadastrado do cartão.</div>
     </>}
     {mode !== 'other' && mode !== 'card-credit' && <Field label={mode === 'cash' ? 'Carteira de dinheiro' : 'Conta utilizada'}><select name="accountId" required defaultValue={editing?.accountId ?? (mode === 'cash' ? data.accounts.find((a) => a.type === 'cash')?.id : '')}><option value="">Selecione a conta</option>{data.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>}
     <Field label="Observações" wide><textarea name="notes" rows={2} defaultValue={editing?.notes}/></Field>
-    {mode !== 'card-credit' && <div className="form-footnote"><ShieldCheck size={15}/> Compras no crédito geram parcelas na data de vencimento da fatura do cartão.</div>}
+    {mode !== 'card-credit' && <div className="form-footnote"><ShieldCheck size={15}/> Para compras no crédito, selecione essa forma de pagamento para registrar cartão, quantidade de parcelas e primeira fatura.</div>}
     <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving || (mode === 'card-credit' && !data.cards.length)}>{saving ? 'Salvando…' : editing ? 'Salvar alterações' : 'Salvar movimentação'}</Button></div>
   </form></Modal>;
 }
@@ -443,8 +447,12 @@ function ReceiveDebtorModal({ debtorId, data, onClose, act }: { debtorId: string
 
 function ReservesPage({ data, showValues, revision, act }: CommonProps) {
   const [balances, setBalances] = useState<Awaited<ReturnType<typeof getReserveBalances>>>([]);
+  const [movements, setMovements] = useState<ReserveMovement[]>([]);
   const [modal, setModal] = useState<'new' | { id: string; type: 'deposit' | 'withdrawal' | 'edit' } | null>(null);
-  useEffect(() => { getReserveBalances().then(setBalances); }, [revision]);
+  useEffect(() => {
+    Promise.all([getReserveBalances(), db.reserveMovements.orderBy('date').reverse().toArray()])
+      .then(([b, m]) => { setBalances(b); setMovements(m); });
+  }, [revision]);
   const total = balances.reduce((sum, item) => sum + item.balanceCents, 0);
   return <>
     <PageHeading eyebrow="OBJETIVOS FINANCEIROS" title="Minhas caixinhas" description="Separe dinheiro por objetivo e configure o rendimento anual de cada caixinha." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button>}/>
@@ -465,6 +473,7 @@ function ReservesPage({ data, showValues, revision, act }: CommonProps) {
       })}
       {!balances.length && <Panel><EmptyState icon={PiggyBank} title="Crie sua primeira caixinha" text="Defina um objetivo, uma taxa anual e acompanhe o saldo crescer." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button>}/></Panel>}
     </div>
+    <Panel><PanelHeader title="Movimentações das caixinhas" subtitle="Depósitos, retiradas e rendimentos; é possível remover um lançamento individual."/><div className="table-scroll"><table><thead><tr><th>CAIXINHA</th><th>TIPO</th><th>DATA</th><th>OBSERVAÇÕES</th><th>VALOR</th><th></th></tr></thead><tbody>{movements.map((move) => <tr key={move.id}><td>{data.reserves.find((reserve) => reserve.id === move.reserveId)?.name ?? '—'}</td><td>{move.type === 'deposit' ? 'Depósito' : move.type === 'withdrawal' ? 'Retirada' : 'Rendimento'}</td><td>{dateBR(move.date)}</td><td>{move.notes ?? '—'}</td><td className={move.type === 'withdrawal' ? 'negative' : 'positive'}>{showValues ? money(move.amountCents) : '••••'}</td><td><button className="icon-button mini danger-icon" title="Excluir movimentação" onClick={() => { if (confirm('Excluir esta movimentação da caixinha? O saldo será recalculado.')) void act(() => deleteReserveMovement(move.id), 'Movimentação excluída.'); }}><X size={14}/></button></td></tr>)}</tbody></table>{!movements.length && <TableEmpty text="Nenhuma movimentação de caixinha registrada."/>}</div></Panel>
     <div className="info-note"><Activity size={17}/><span>O Nexo calcula rendimento composto por dia corrido usando a taxa anual informada. A atualização é feita quando você abre o sistema; se ficar alguns dias sem entrar, os dias anteriores são calculados na próxima abertura. É uma simulação e pode não incluir impostos, taxas ou regras específicas do banco.</span></div>
     {modal === 'new' && <ReserveModal editing={null} onClose={() => setModal(null)} act={act}/>}
     {modal && typeof modal === 'object' && modal.type === 'edit' && <ReserveModal editing={balances.find((item) => item.reserve.id === modal.id)?.reserve ?? null} onClose={() => setModal(null)} act={act}/>}
