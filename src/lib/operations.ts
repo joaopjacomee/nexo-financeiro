@@ -50,8 +50,7 @@ export async function createCardPurchase(input: {
   const committed = await db.installments.where('cardId').equals(card.id).toArray();
   const currentCommitment = committed.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
   if (input.totalCents + currentCommitment > card.limitCents) {
-    const accepted = globalThis.confirm(`A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ${((card.limitCents - currentCommitment) / 100).toFixed(2)}. Deseja registrar mesmo assim?`);
-    if (!accepted) return;
+    throw new Error(`A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ${((card.limitCents - currentCommitment) / 100).toFixed(2)}.`);
   }
   const purchaseId = makeId();
   const purchase = {
