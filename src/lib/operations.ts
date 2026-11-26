@@ -1,6 +1,6 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
-import { allocateInvoicePayment, calculateDailyCdiRate, calculateReserveWithdrawalImpactCents, splitInstallmentCents } from './calculations';
+import { allocateInvoicePayment, calculateDailyCdiRate, calculateReserveWithdrawalImpactCents, splitInstallmentCents, FINANCIAL_START_MONTH } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, Transaction } from '../types';
 
 export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt' | 'month'> & {
@@ -168,6 +168,7 @@ export async function createCardPurchase(input: {
 }
 
 export async function payInvoice(input: { cardId: string; accountId: string; month: string; amountCents: number; date: string }) {
+  if (input.month < FINANCIAL_START_MONTH) throw new Error('O controle de faturas começa em dezembro de 2026.');
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor de pagamento válido.');
   const card = await db.cards.get(input.cardId);
   const account = await db.accounts.get(input.accountId);
