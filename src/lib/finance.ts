@@ -120,7 +120,8 @@ export async function getCategorySpend(month: string) {
 }
 
 export async function getTransactionsForMonth(month: string): Promise<Transaction[]> {
-  return db.transactions.where('month').equals(month).reverse().sortBy('date');
+  const rows = await db.transactions.where('month').equals(month).sortBy('date');
+  return rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getInstallmentsForMonth(month: string): Promise<Installment[]> {
