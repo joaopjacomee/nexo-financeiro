@@ -72,7 +72,7 @@ async function captureHistorySnapshot(): Promise<HistorySnapshot> {
 
 async function restoreHistorySnapshot(snapshot: HistorySnapshot) {
   const tables = HISTORY_TABLES.map((name) => db.table(name));
-  await db.transaction('rw', ...tables, async () => {
+  await db.transaction('rw', tables, async () => {
     for (const name of HISTORY_TABLES) {
       const table = db.table(name);
       await table.clear();
@@ -128,8 +128,9 @@ export default function App() {
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3200); return () => window.clearTimeout(timer); }, [toast]);
   const act = async (action: () => Promise<unknown>, successMessage = 'Alterações salvas.'): Promise<boolean> => {
     if (historyBusy.current) return false;
+    let before: HistorySnapshot | null = null;
     try {
-      const before = await captureHistorySnapshot();
+      before = await captureHistorySnapshot();
       await action();
       const after = await captureHistorySnapshot();
       if (JSON.stringify(before) !== JSON.stringify(after)) {
@@ -142,6 +143,20 @@ export default function App() {
       setToast({ message: successMessage, kind: 'success' });
       return true;
     } catch (error) {
+      // Some multi-step removals span more than one IndexedDB transaction. Capture
+      // partial changes too, so a failed removal can still be undone safely.
+      if (before) {
+        try {
+          const after = await captureHistorySnapshot();
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            historyRef.current = { before, after };
+            historyPosition.current = 'after';
+            setCanUndo(true);
+            setCanRedo(false);
+            refresh();
+          }
+        } catch { /* Keep the original operation error visible. */ }
+      }
       setToast({ message: error instanceof Error ? error.message : 'Não foi possível concluir a operação.', kind: 'error' });
       return false;
     }
