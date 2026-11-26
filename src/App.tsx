@@ -407,6 +407,36 @@ function DebtorsPage({ data, showValues, revision, act }: CommonProps) {
     {modal && modal !== 'new' && <ReceiveDebtorModal debtorId={modal} data={data} onClose={() => setModal(null)} act={act}/>}
   </>;
 }
+function DebtorModal({ data, onClose, act }: { data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
+  const [form, setForm] = useState({ person: '', description: '', amount: '', originDate: today(), dueDate: '', categoryId: '', originalPayment: '', notes: '' });
+  const submit = () => act(() => createDebtor({ person: form.person, description: form.description, originalCents: toCents(form.amount), originDate: form.originDate, dueDate: form.dueDate || undefined, categoryId: form.categoryId || undefined, originalPayment: form.originalPayment || undefined, notes: form.notes }), 'Dívida registrada.').then((ok) => { if (ok) onClose(); });
+  return <Modal title="Adicionar dívida" onClose={onClose}><div className="form-grid">
+    <Field label="Nome da pessoa"><input value={form.person} onChange={(e) => setForm({ ...form, person: e.target.value })}/></Field>
+    <Field label="Valor devido (R$)"><input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0,00"/></Field>
+    <Field label="Descrição"><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field>
+    <Field label="Data da dívida"><input type="date" value={form.originDate} onChange={(e) => setForm({ ...form, originDate: e.target.value })}/></Field>
+    <Field label="Previsão de pagamento"><input type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })}/></Field>
+    <Field label="Categoria relacionada"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
+    <Field label="Forma de pagamento original"><input value={form.originalPayment} onChange={(e) => setForm({ ...form, originalPayment: e.target.value })} placeholder="Ex.: Pix, cartão…"/></Field>
+    <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
+    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit}>Salvar dívida</Button></div>
+  </div></Modal>;
+}
+function ReceiveDebtorModal({ debtorId, data, onClose, act }: { debtorId: string; data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
+  const debtor = data.debtors.find((item) => item.id === debtorId);
+  const [form, setForm] = useState({ accountId: data.accounts[0]?.id ?? '', amount: '', date: today(), notes: '' });
+  const submit = () => act(() => receiveDebtorPayment({ debtorId, ...form, amountCents: toCents(form.amount) }), 'Recebimento registrado e saldo da conta atualizado.').then((ok) => { if (ok) onClose(); });
+  return <Modal title={`Receber de ${debtor?.person ?? 'devedor'}`} onClose={onClose}><div className="form-grid">
+    <div className="inline-summary field-wide"><span>Dívida</span><strong>{debtor?.description}</strong></div>
+    <Field label="Valor recebido (R$)"><input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}/></Field>
+    <Field label="Conta de recebimento"><select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>{data.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
+    <Field label="Data"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}/></Field>
+    <Field label="Observações"><input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
+    <div className="form-footnote">Esse recebimento reduz o valor pendente da dívida; não é uma nova receita.</div>
+    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit}>Registrar recebimento</Button></div>
+  </div></Modal>;
+}
+
 function ReservesPage({ data, showValues, revision, act }: CommonProps) {
   const [balances, setBalances] = useState<Awaited<ReturnType<typeof getReserveBalances>>>([]);
   const [modal, setModal] = useState<'new' | { id: string; type: 'deposit' | 'withdrawal' | 'edit' } | null>(null);
