@@ -276,7 +276,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
       ? createCardPurchase({ description: String(payload.get('description') ?? ''), totalCents: toCents(raw), cardId: String(payload.get('cardId') || ''), installmentsCount: Number(payload.get('installmentsCount') || 1), purchaseDate: String(payload.get('date')), firstDueMonth: String(payload.get('firstDueMonth') || addMonths(String(payload.get('date')).slice(0, 7), 1)), categoryId, expenseClass, notes })
       : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, notes }),
       editing ? 'Movimentação atualizada.' : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
-    if (ok) { setModal(false); setEditing(null); }
+    if (ok) { const savedMonth = String(payload.get('date') ?? '').slice(0, 7); if (/^\\d{4}-\\d{2}$/.test(savedMonth)) setMonth(savedMonth); setModal(false); setEditing(null); }
   };
   const accountName = (id?: string) => data.accounts.find((acc) => acc.id === id)?.name ?? '—';
   return <>
