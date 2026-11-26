@@ -9,7 +9,8 @@ import {
   calculateWishlistRemainingCents,
   calculateMonthlyFreeCents,
   calculateReserveRemaining,
-  splitInstallmentCents,\n  FINANCIAL_START_MONTH,\n  isMonthInAccountingPeriod,\n  isExpenseInAccountingPeriod,
+  splitInstallmentCents,
+  FINANCIAL_START_MONTH,\n  isMonthInAccountingPeriod,\n  isExpenseInAccountingPeriod,
 } from '../.tmp-tests/calculations.js';
 
 test('divisão de compra em seis parcelas preserva o total', () => {
