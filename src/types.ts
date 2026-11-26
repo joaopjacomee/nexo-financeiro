@@ -33,7 +33,7 @@ export interface Transfer {
 }
 export interface Debtor {
   id: ID; person: string; description: string; originalCents: number; originDate: string; dueDate?: string;
-  categoryId?: ID; originalPayment?: string; originAccountId?: ID; notes?: string; linkedTransactionId?: ID; createdAt: string;
+  categoryId?: ID; originalPayment?: string; originAccountId?: ID; notes?: string; linkedTransactionId?: ID; sharedExpenseId?: ID; createdAt: string;
 }
 export interface DebtorPayment {
   id: ID; debtorId: ID; accountId: ID; amountCents: number; date: string; linkedTransactionId?: ID; notes?: string;
