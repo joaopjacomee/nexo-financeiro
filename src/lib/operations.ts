@@ -119,9 +119,9 @@ export async function saveReserve(input: Omit<Reserve, 'id' | 'createdAt'> & { i
   if (!input.name.trim() || !Number.isSafeInteger(input.targetCents) || input.targetCents < 0) throw new Error('Informe nome e uma meta válida.');
   const annualYieldPercent = input.annualYieldPercent ?? 0;
   if (!Number.isFinite(annualYieldPercent) || annualYieldPercent < 0 || annualYieldPercent > 100) throw new Error('Informe um rendimento anual entre 0% e 100%.');
+  if (input.id) await processReserveYields();
   const existing = input.id ? await db.reserves.get(input.id) : undefined;
   if (input.id && !existing) throw new Error('Caixinha não encontrada.');
-  if (existing) await processReserveYields();
   const value: Reserve = {
     ...existing,
     ...input,
@@ -150,6 +150,7 @@ export async function processReserveYields(referenceDate = today()) {
         .reduce((sum, move) => sum + reserveMovementDelta(move.type, move.amountCents), 0);
       const annualRate = reserve.annualYieldPercent ?? 0;
       const dailyRate = annualRate > 0 ? Math.pow(1 + annualRate / 100, 1 / 365) - 1 : 0;
+      let remainderCents = reserve.yieldRemainderCents ?? 0;
       const cursor = new Date(`${lastDate}T00:00:00.000Z`);
       while (true) {
         cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -159,7 +160,9 @@ export async function processReserveYields(referenceDate = today()) {
           if (move.date === date) balance += reserveMovementDelta(move.type, move.amountCents);
         }
         if (dailyRate > 0 && balance > 0) {
-          const amountCents = Math.round(balance * dailyRate);
+          const exactYieldCents = (balance + remainderCents) * dailyRate;
+          const amountCents = Math.floor(exactYieldCents);
+          remainderCents = exactYieldCents - amountCents;
           if (amountCents > 0) {
             await db.reserveMovements.add({
               id: makeId(),
@@ -174,7 +177,7 @@ export async function processReserveYields(referenceDate = today()) {
           }
         }
       }
-      await db.reserves.update(reserve.id, { lastYieldDate: referenceDate });
+      await db.reserves.update(reserve.id, { lastYieldDate: referenceDate, yieldRemainderCents: remainderCents });
     }
   });
   return processed;
