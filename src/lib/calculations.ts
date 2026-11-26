@@ -78,9 +78,9 @@ export function calculateWishlistRemainingCents(initialCents: number, purchasesC
 export const FINANCIAL_START_MONTH = '2026-12';
 
 export function isMonthInAccountingPeriod(month: string): boolean {
-  return /^\\d{4}-\\d{2}$/.test(month) && month >= FINANCIAL_START_MONTH;
+  return /^\d{4}-\d{2}$/.test(month) && month >= FINANCIAL_START_MONTH;
 }
 
 export function isExpenseInAccountingPeriod(date: string): boolean {
-  return /^\\d{4}-\\d{2}-\\d{2}$/.test(date) && date.slice(0, 7) >= FINANCIAL_START_MONTH;
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date.slice(0, 7) >= FINANCIAL_START_MONTH;
 }
