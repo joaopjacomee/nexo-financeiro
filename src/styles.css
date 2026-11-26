@@ -21,3 +21,5 @@
 @media(max-width:700px){.quick-links{grid-template-columns:1fr 1fr}.debtor-detail{grid-template-columns:1fr}.debtor-detail-actions{justify-content:space-between}}
 
 .dashboard-comparison-chart{margin:0 0 16px}.dashboard-comparison-chart .recharts-cartesian-axis-tick text{font-size:10px}.debtor-payment-row{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-top:5px;border-top:1px solid #eee8f5;color:#81768f;font-size:9px}.debtor-payment-row .icon-button{flex-shrink:0}
+
+.action-toast{position:fixed;right:24px;bottom:24px;z-index:1000;display:flex;align-items:center;gap:10px;max-width:min(440px,calc(100vw - 32px));padding:13px 17px;border-radius:12px;background:#fff;box-shadow:0 10px 35px #24123725;border:1px solid #eee8f5;color:#4d3b60;font:600 12px system-ui;animation:toast-in .18s ease-out}.action-toast.success svg{color:#15966b}.action-toast.error{border-color:#f3c8d1;color:#a83e59}.action-toast.error svg{color:#c34f6d}@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
