@@ -9,7 +9,7 @@ export interface Account {
   id: ID; name: string; institution: string; type: AccountType; initialBalanceCents: number; identifier?: string; createdAt: string;
 }
 export interface Card {
-  id: ID; name: string; institution: string; brand: string; limitCents: number; closingDay: number; dueDay: number; color: string; createdAt: string;
+  id: ID; name: string; institution: string; brand: string; limitCents: number; closingDay: number; dueDay: number; color: string; createdAt: string; kind?: 'credit';
 }
 export interface Transaction {
   id: ID; type: 'income' | 'expense'; description: string; amountCents: number; date: string; month: string;
@@ -39,9 +39,10 @@ export interface DebtorPayment {
 }
 export interface Reserve {
   id: ID; name: string; targetCents: number; createdAt: string; targetDate?: string; notes?: string; closed?: boolean;
+  annualYieldPercent?: number; lastYieldDate?: string;
 }
 export interface ReserveMovement {
-  id: ID; reserveId: ID; type: 'deposit' | 'withdrawal'; amountCents: number; date: string; notes?: string;
+  id: ID; reserveId: ID; type: 'deposit' | 'withdrawal' | 'yield'; amountCents: number; date: string; notes?: string;
 }
 export interface MonthlyBudget { id: ID; month: string; categoryId: ID; budgetCents: number; }
 export interface MonthRecord { id: string; month: string; createdAt: string; }
@@ -56,4 +57,4 @@ export interface CdiRate { id: string; date: string; annualRate: number; source:
 export interface CdiAccrual { id: string; investmentId: ID; date: string; rateDaily: number; amountCents: number; balanceAfterCents: number; }
 export interface Setting { key: string; value: unknown; }
 
-export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'cdi' | 'reports' | 'calendar' | 'forecast' | 'patrimony' | 'settings';
+export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'calendar' | 'forecast' | 'patrimony' | 'settings';
