@@ -400,7 +400,7 @@ function DebtorsPage({ data, showValues, revision, act }: CommonProps) {
             <div className="debtor-detail-actions"><span className={`status-pill ${status === 'Quitado' ? 'status-received' : status === 'Atrasado' ? 'status-cancelled' : 'status-pending'}`}>{status}</span>{remainingCents > 0 && <Button size="small" onClick={() => setModal(debtor.id)}>Receber</Button>}</div>
           </div>)}</div></td></tr>}
         </Fragment>)}</tbody></table>
-        {!people.length && <EmptyState icon={HandCoins} title="Nenhum valor a receber" text="Cadastre uma dívida para começar o acompanhamento." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Adicionar dívida</Button}/>}
+        {!people.length && <EmptyState icon={HandCoins} title="Nenhum valor a receber" text="Cadastre uma dívida para começar o acompanhamento." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Adicionar dívida</Button>}/>}
       </div>
     </Panel>
     {modal === 'new' && <DebtorModal data={data} onClose={() => setModal(null)} act={act}/>}
@@ -429,7 +429,7 @@ function ReservesPage({ data, showValues, revision, act }: CommonProps) {
           {reserve.targetDate && <small className="reserve-deadline">Prazo: {dateBR(reserve.targetDate)}</small>}
         </Panel>;
       })}
-      {!balances.length && <Panel><EmptyState icon={PiggyBank} title="Crie sua primeira caixinha" text="Defina um objetivo, uma taxa anual e acompanhe o saldo crescer." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button}/></Panel>}
+      {!balances.length && <Panel><EmptyState icon={PiggyBank} title="Crie sua primeira caixinha" text="Defina um objetivo, uma taxa anual e acompanhe o saldo crescer." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button>}/></Panel>}
     </div>
     <div className="info-note"><Activity size={17}/><span>O Nexo calcula rendimento composto por dia corrido usando a taxa anual informada. A atualização é feita quando você abre o sistema; se ficar alguns dias sem entrar, os dias anteriores são calculados na próxima abertura. É uma simulação e pode não incluir impostos, taxas ou regras específicas do banco.</span></div>
     {modal === 'new' && <ReserveModal editing={null} onClose={() => setModal(null)} act={act}/>}
