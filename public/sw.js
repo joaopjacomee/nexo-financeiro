@@ -14,14 +14,23 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(
-        keys.filter((key) => key.startsWith('nexo-shell-') && key !== CACHE_NAME)
-          .map((key) => caches.delete(key)),
-      ))
-      .then(() => self.clients.claim()),
-  );
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    const hadOlderNexoCache = keys.some((key) => key.startsWith('nexo-') && key !== CACHE_NAME);
+    await Promise.all(keys
+      .filter((key) => key.startsWith('nexo-') && key !== CACHE_NAME)
+      .map((key) => caches.delete(key)));
+    await self.clients.claim();
+
+    // Older Nexo service workers kept serving the old index.html from cache.
+    // Reload already-open tabs once the replacement worker takes control.
+    if (hadOlderNexoCache) {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      await Promise.all(windows.map(async (client) => {
+        try { await client.navigate(client.url); } catch { /* A tab may have closed. */ }
+      }));
+    }
+  })());
 });
 
 self.addEventListener('fetch', (event) => {
@@ -30,9 +39,6 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
-
-    // Always check the network for page navigation so a deployed HTML shell
-    // cannot remain frozen in the browser's cache forever.
     if (request.mode === 'navigate') {
       try {
         const response = await fetch(request, { cache: 'no-store' });
