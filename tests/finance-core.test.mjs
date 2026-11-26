@@ -9,7 +9,7 @@ import {
   calculateWishlistRemainingCents,
   calculateMonthlyFreeCents,
   calculateReserveRemaining,
-  splitInstallmentCents,
+  splitInstallmentCents,\n  FINANCIAL_START_MONTH,\n  isMonthInAccountingPeriod,\n  isExpenseInAccountingPeriod,
 } from '../.tmp-tests/calculations.js';
 
 test('divisão de compra em seis parcelas preserva o total', () => {
@@ -96,4 +96,15 @@ test('retirada libera somente a parte formada por aportes novos', () => {
 test('lista de desejo desconta compras do valor inicial sem interferir no patrimônio', () => {
   assert.equal(calculateWishlistRemainingCents(50000, [12000, 8500]), 29500);
   assert.equal(calculateWishlistRemainingCents(10000, [12000]), -2000);
+});
+
+
+test('despesas de preparação anteriores a dezembro de 2026 não entram no período financeiro', () => {
+  assert.equal(FINANCIAL_START_MONTH, '2026-12');
+  assert.equal(isExpenseInAccountingPeriod('2026-11-01'), false);
+  assert.equal(isExpenseInAccountingPeriod('2026-11-30'), false);
+  assert.equal(isExpenseInAccountingPeriod('2026-12-01'), true);
+  assert.equal(isMonthInAccountingPeriod('2026-11'), false);
+  assert.equal(isMonthInAccountingPeriod('2026-12'), true);
+  assert.equal(isMonthInAccountingPeriod('2027-01'), true);
 });
