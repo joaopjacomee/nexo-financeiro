@@ -1,4 +1,4 @@
-import { db } from './db';
+import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
 import { allocateInvoicePayment, calculateDailyCdiRate, splitInstallmentCents } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, Transaction } from '../types';
@@ -36,7 +36,7 @@ export async function saveCard(input: Omit<Card, 'id' | 'createdAt'> & { id?: st
 }
 
 export async function createCardPurchase(input: {
-  description: string; totalCents: number; cardId: string; categoryId?: string; purchaseDate: string; firstDueMonth: string; installmentsCount: number; notes?: string;
+  description: string; totalCents: number; cardId: string; categoryId?: string; expenseClass?: Transaction['expenseClass']; purchaseDate: string; firstDueMonth: string; installmentsCount: number; notes?: string;
 }) {
   if (!input.description.trim()) throw new Error('Informe a descrição da compra.');
   if (!Number.isSafeInteger(input.totalCents) || input.totalCents <= 0) throw new Error('Valor da compra inválido.');
@@ -52,7 +52,7 @@ export async function createCardPurchase(input: {
   const purchaseId = makeId();
   const purchase = {
     id: purchaseId, description: input.description.trim(), totalCents: input.totalCents, cardId: input.cardId,
-    categoryId: input.categoryId, purchaseDate: input.purchaseDate, firstDueMonth: input.firstDueMonth,
+    categoryId: input.categoryId, expenseClass: input.expenseClass, purchaseDate: input.purchaseDate, firstDueMonth: input.firstDueMonth,
     installmentsCount: input.installmentsCount, createdAt: new Date().toISOString(), notes: input.notes,
   };
   const installmentAmounts = splitInstallmentCents(input.totalCents, input.installmentsCount);
@@ -99,10 +99,33 @@ export async function createTransfer(input: { fromAccountId: string; toAccountId
   await db.transfers.add({ id: makeId(), ...input });
 }
 
-export async function createDebtor(input: Omit<Debtor, 'id' | 'createdAt'>) {
+export async function createDebtor(input: Omit<Debtor, 'id' | 'createdAt' | 'linkedTransactionId'>) {
   if (!input.person.trim() || !input.description.trim()) throw new Error('Informe pessoa e descrição.');
+  if (!input.originAccountId || !(await db.accounts.get(input.originAccountId))) throw new Error('Selecione a conta de onde o dinheiro saiu.');
   if (!Number.isSafeInteger(input.originalCents) || input.originalCents <= 0) throw new Error('Valor da dívida inválido.');
-  await db.debtors.add({ ...input, id: makeId(), createdAt: new Date().toISOString() });
+  const id = makeId();
+  const linkedTransactionId = makeId();
+  const loanExpense: Transaction = {
+    id: linkedTransactionId,
+    type: 'expense',
+    description: `Empréstimo para ${input.person.trim()}: ${input.description.trim()}`,
+    amountCents: input.originalCents,
+    date: input.originDate,
+    month: input.originDate.slice(0, 7),
+    categoryId: input.categoryId,
+    expenseClass: 'Essencial',
+    status: 'paid',
+    paymentMode: 'pix',
+    accountId: input.originAccountId,
+    notes: input.notes,
+    createdAt: new Date().toISOString(),
+  };
+  const debtor: Debtor = { ...input, id, linkedTransactionId, createdAt: new Date().toISOString() };
+  await db.transaction('rw', db.debtors, db.transactions, db.months, async () => {
+    await db.debtors.add(debtor);
+    await db.transactions.add(loanExpense);
+    await db.months.put({ id: loanExpense.month, month: loanExpense.month, createdAt: new Date().toISOString() });
+  });
 }
 
 export async function receiveDebtorPayment(input: { debtorId: string; accountId: string; amountCents: number; date: string; notes?: string }) {
@@ -112,7 +135,26 @@ export async function receiveDebtorPayment(input: { debtorId: string; accountId:
   const received = payments.reduce((sum, item) => sum + item.amountCents, 0);
   const remaining = debtor.originalCents - received;
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0 || input.amountCents > remaining) throw new Error('O recebimento deve ser maior que zero e não pode superar o saldo devido.');
-  await db.debtorPayments.add({ id: makeId(), ...input });
+  const linkedTransactionId = makeId();
+  const paymentTransaction: Transaction = {
+    id: linkedTransactionId,
+    type: 'income',
+    description: `Pagamento ${debtor.person}`,
+    amountCents: input.amountCents,
+    date: input.date,
+    month: input.date.slice(0, 7),
+    categoryId: debtor.categoryId,
+    status: 'received',
+    paymentMode: 'pix',
+    accountId: input.accountId,
+    notes: input.notes,
+    createdAt: new Date().toISOString(),
+  };
+  await db.transaction('rw', db.debtorPayments, db.transactions, db.months, async () => {
+    await db.debtorPayments.add({ id: makeId(), ...input, linkedTransactionId });
+    await db.transactions.add(paymentTransaction);
+    await db.months.put({ id: paymentTransaction.month, month: paymentTransaction.month, createdAt: new Date().toISOString() });
+  });
 }
 
 export async function saveReserve(input: Omit<Reserve, 'id' | 'createdAt'> & { id?: string }) {
@@ -336,3 +378,144 @@ export async function decryptBackup(envelope: { format?: string; salt: string; i
 }
 function toBase64(data: Uint8Array) { return btoa(String.fromCharCode(...data)); }
 function fromBase64(data: string) { return Uint8Array.from(atob(data), (char) => char.charCodeAt(0)); }
+
+
+// Exclusions keep related records consistent and remove dependent records only.
+export async function deleteDebtor(debtorId: string) {
+  const debtor = await db.debtors.get(debtorId);
+  if (!debtor) return;
+  const payments = await db.debtorPayments.where('debtorId').equals(debtorId).toArray();
+  await db.transaction('rw', db.debtors, db.debtorPayments, db.transactions, async () => {
+    await db.transactions.bulkDelete([debtor.linkedTransactionId, ...payments.map((item) => item.linkedTransactionId)].filter((id): id is string => Boolean(id)));
+    await db.debtorPayments.where('debtorId').equals(debtorId).delete();
+    await db.debtors.delete(debtorId);
+  });
+}
+
+export async function deleteDebtorPayment(paymentId: string) {
+  const payment = await db.debtorPayments.get(paymentId);
+  if (!payment) return;
+  await db.transaction('rw', db.debtorPayments, db.transactions, async () => {
+    await db.debtorPayments.delete(paymentId);
+    if (payment.linkedTransactionId) await db.transactions.delete(payment.linkedTransactionId);
+  });
+}
+
+export async function deleteTransaction(id: string) {
+  const debtor = await db.debtors.filter((item) => item.linkedTransactionId === id).first();
+  if (debtor) return deleteDebtor(debtor.id);
+  const payment = await db.debtorPayments.filter((item) => item.linkedTransactionId === id).first();
+  if (payment) return deleteDebtorPayment(payment.id);
+  await db.transactions.delete(id);
+}
+
+export async function deletePurchase(purchaseId: string) {
+  const installments = await db.installments.where('purchaseId').equals(purchaseId).toArray();
+  const installmentIds = new Set(installments.map((item) => item.id));
+  const payments = await db.invoicePayments.toArray();
+  await db.transaction('rw', db.purchases, db.installments, db.invoicePayments, async () => {
+    for (const payment of payments) {
+      const removed = payment.allocations.filter((allocation) => installmentIds.has(allocation.installmentId));
+      if (!removed.length) continue;
+      const refundedAllocationCents = removed.reduce((sum, allocation) => sum + allocation.amountCents, 0);
+      const allocations = payment.allocations.filter((allocation) => !installmentIds.has(allocation.installmentId));
+      const amountCents = Math.max(0, payment.amountCents - refundedAllocationCents);
+      if (amountCents === 0 || allocations.length === 0) await db.invoicePayments.delete(payment.id);
+      else await db.invoicePayments.update(payment.id, { amountCents, allocations });
+    }
+    await db.installments.bulkDelete([...installmentIds]);
+    await db.purchases.delete(purchaseId);
+  });
+}
+
+export async function deleteCard(cardId: string) {
+  const purchases = await db.purchases.where('cardId').equals(cardId).toArray();
+  for (const purchase of purchases) await deletePurchase(purchase.id);
+  await db.transaction('rw', db.cards, db.invoicePayments, async () => {
+    await db.invoicePayments.where('cardId').equals(cardId).delete();
+    await db.cards.delete(cardId);
+  });
+}
+
+export async function deleteInvoicePayment(paymentId: string) {
+  const payment = await db.invoicePayments.get(paymentId);
+  if (!payment) return;
+  await db.transaction('rw', db.invoicePayments, db.installments, async () => {
+    for (const allocation of payment.allocations) {
+      const installment = await db.installments.get(allocation.installmentId);
+      if (installment) await db.installments.update(installment.id, { paidCents: Math.max(0, installment.paidCents - allocation.amountCents) });
+    }
+    await db.invoicePayments.delete(paymentId);
+  });
+}
+
+export async function deleteTransfer(transferId: string) {
+  await db.transfers.delete(transferId);
+}
+
+export async function deleteCategory(categoryId: string) {
+  const [transactions, purchases, debtors, budgets] = await Promise.all([
+    db.transactions.where('categoryId').equals(categoryId).toArray(),
+    db.purchases.where('categoryId').equals(categoryId).toArray(),
+    db.debtors.where('categoryId').equals(categoryId).toArray(),
+    db.monthlyBudgets.where('categoryId').equals(categoryId).toArray(),
+  ]);
+  await db.transaction('rw', db.categories, db.transactions, db.purchases, db.debtors, db.monthlyBudgets, async () => {
+    for (const item of transactions) await db.transactions.update(item.id, { categoryId: undefined });
+    for (const item of purchases) await db.purchases.update(item.id, { categoryId: undefined });
+    for (const item of debtors) await db.debtors.update(item.id, { categoryId: undefined });
+    await db.monthlyBudgets.bulkDelete(budgets.map((item) => item.id));
+    await db.categories.delete(categoryId);
+  });
+}
+
+export async function deleteReserve(reserveId: string) {
+  await db.transaction('rw', db.reserves, db.reserveMovements, async () => {
+    await db.reserveMovements.where('reserveId').equals(reserveId).delete();
+    await db.reserves.delete(reserveId);
+  });
+}
+
+export async function deleteReserveMovement(movementId: string) {
+  await db.reserveMovements.delete(movementId);
+}
+
+export async function deleteAccount(accountId: string) {
+  const debtors = await db.debtors.where('originAccountId').equals(accountId).toArray();
+  for (const debtor of debtors) await deleteDebtor(debtor.id);
+  const [transactions, transfers, payments, debtorPayments, movements] = await Promise.all([
+    db.transactions.where('accountId').equals(accountId).toArray(),
+    db.transfers.toArray().then((items) => items.filter((item) => item.fromAccountId === accountId || item.toAccountId === accountId)),
+    db.invoicePayments.where('accountId').equals(accountId).toArray(),
+    db.debtorPayments.where('accountId').equals(accountId).toArray(),
+    db.investmentMovements.where('accountId').equals(accountId).toArray(),
+  ]);
+  for (const payment of payments) await deleteInvoicePayment(payment.id);
+  for (const payment of debtorPayments) await deleteDebtorPayment(payment.id);
+  const investmentIds = new Set(movements.map((item) => item.investmentId));
+  await db.transaction('rw', db.accounts, db.transactions, db.transfers, db.investmentMovements, db.investments, async () => {
+    await db.transactions.bulkDelete(transactions.map((item) => item.id));
+    await db.transfers.bulkDelete(transfers.map((item) => item.id));
+    await db.investmentMovements.bulkDelete(movements.map((item) => item.id));
+    for (const investmentId of investmentIds) {
+      const investment = await db.investments.get(investmentId);
+      if (!investment) continue;
+      const remaining = await db.investmentMovements.where('investmentId').equals(investmentId).toArray();
+      const balanceCents = remaining.reduce((sum, move) => sum + (move.type === 'contribution' ? move.amountCents : -move.amountCents), investment.initialCents);
+      await db.investments.update(investmentId, { balanceCents: Math.max(0, balanceCents) });
+    }
+    await db.accounts.delete(accountId);
+  });
+}
+
+export async function clearTestData() {
+  const tables = [
+    'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
+    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings',
+  ] as const;
+  await db.transaction('rw', tables.map((name) => db.table(name)), async () => {
+    for (const name of tables) await db.table(name).clear();
+  });
+  await initializeDatabase();
+}
