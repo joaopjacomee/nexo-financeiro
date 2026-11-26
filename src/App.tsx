@@ -243,6 +243,30 @@ export default function App() {
 
 type CommonProps = { data: Snapshot; month: string; setMonth: (v: string) => void; showValues: boolean; revision: number; refresh: () => void; act: (action: () => Promise<unknown>, success?: string) => Promise<boolean>; query: string };
 
+function MultiSelectFilter({ label, allLabel, options, selected, onChange }: {
+  label: string;
+  allLabel: string;
+  options: Array<{ value: string; label: string }>;
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const summary = selected.length === 0
+    ? allLabel
+    : selected.length === 1
+      ? options.find((option) => option.value === selected[0])?.label ?? '1 selecionado'
+      : `${selected.length} selecionados`;
+  return <details className="multi-filter">
+    <summary title={summary}><span>{label}</span><strong>{summary}</strong><ChevronRight size={13}/></summary>
+    <div className="multi-filter-menu">
+      <button type="button" className="multi-filter-clear" onClick={() => onChange([])}>Todas as opções</button>
+      {options.map((option) => <label key={option.value} className="multi-filter-option">
+        <input type="checkbox" checked={selected.includes(option.value)} onChange={(event) => onChange(event.target.checked ? [...selected, option.value] : selected.filter((value) => value !== option.value))}/>
+        <span>{option.label}</span>
+      </label>)}
+    </div>
+  </details>;
+}
+
 function PageHeading({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) {
   return <div className="page-heading"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h2>{title}</h2>{description && <p>{description}</p>}</div>{action && <div className="heading-action">{action}</div>}</div>;
 }
@@ -351,13 +375,21 @@ function MonthsPage({ data, month, setMonth, showValues, revision, refresh, act 
 function TransactionsPage({ data, month, setMonth, showValues, revision, refresh, act, query }: CommonProps) {
   const [items, setItems] = useState<Transaction[]>([]);
   const [modal, setModal] = useState(false);
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [typeFilters, setTypeFilters] = useState<string[]>([]);
+  const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Transaction | null>(null);
-  useEffect(() => { db.transactions.where('month').equals(month).reverse().sortBy('date').then(setItems); }, [month, revision]);
-  const filtered = items.filter((item) => (typeFilter === 'all' || item.type === typeFilter) && (categoryFilter === 'all' || item.categoryId === categoryFilter) && (statusFilter === 'all' || (item.type === 'expense' && item.expenseClass === statusFilter)) && `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase()));
+  useEffect(() => {
+    db.transactions.where('month').equals(month).sortBy('date')
+      .then((rows) => setItems(rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))));
+  }, [month, revision]);
+  const filtered = items.filter((item) =>
+    (!typeFilters.length || typeFilters.includes(item.type)) &&
+    (!categoryFilters.length || categoryFilters.includes(item.categoryId ?? 'uncategorized')) &&
+    (!statusFilters.length || (item.type === 'expense' && statusFilters.includes(item.expenseClass ?? 'Essencial'))) &&
+    `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase())
+  ).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   const submit = async (payload: FormData) => {
     const raw = String(payload.get('amount') ?? '');
     const type = String(payload.get('type')) as 'income' | 'expense';
@@ -377,7 +409,11 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const accountName = (id?: string) => data.accounts.find((acc) => acc.id === id)?.name ?? '—';
   return <>
     <PageHeading eyebrow="LANÇAMENTOS" title="Entradas e saídas em um só lugar" description="Registre, pesquise e acompanhe suas movimentações financeiras." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><Button onClick={() => { setEditing(null); setModal(true); }}><Plus size={16}/> Nova movimentação</Button></div>}/>
-    <Panel><div className="filter-toolbar"><div className="search-box"><Search size={16}/><input placeholder="Buscar descrição..." value={search} onChange={(e) => setSearch(e.target.value)}/></div><div className="filter-selects"><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="all">Todos os tipos</option><option value="income">Receitas</option><option value="expense">Despesas</option></select><select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}><option value="all">Todas as categorias</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="all">Todas as classificações</option><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>CLASSIFICAÇÃO</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}{data.debtors.find((debtor) => debtor.sharedExpenseId === item.id) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedExpenseId === item.id)?.person}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <span className="status-pill">{item.expenseClass ?? 'Essencial'}</span>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { void act(() => deleteTransaction(item.id)); }}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
+    <Panel><div className="filter-toolbar"><div className="search-box"><Search size={16}/><input placeholder="Buscar descrição..." value={search} onChange={(e) => setSearch(e.target.value)}/></div><div className="filter-selects">
+      <MultiSelectFilter label="Tipo" allLabel="Todos os tipos" options={[{ value: 'income', label: 'Receitas' }, { value: 'expense', label: 'Despesas' }]} selected={typeFilters} onChange={setTypeFilters}/>
+      <MultiSelectFilter label="Categoria" allLabel="Todas as categorias" options={[{ value: 'uncategorized', label: 'Sem categoria' }, ...data.categories.map((category) => ({ value: category.id, label: category.name }))]} selected={categoryFilters} onChange={setCategoryFilters}/>
+      <MultiSelectFilter label="Classificação" allLabel="Todas as classificações" options={[{ value: 'Investimento', label: 'Investimento' }, { value: 'Essencial', label: 'Essencial' }, { value: 'Supérfluo', label: 'Supérfluo' }]} selected={statusFilters} onChange={setStatusFilters}/>
+    </div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>CLASSIFICAÇÃO</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}{data.debtors.find((debtor) => debtor.sharedExpenseId === item.id) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedExpenseId === item.id)?.person}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <span className="status-pill">{item.expenseClass ?? 'Essencial'}</span>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { void act(() => deleteTransaction(item.id)); }}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
     {modal && <TransactionModal data={data} month={month} editing={editing} onClose={() => { setModal(false); setEditing(null); }} onSubmit={submit}/> }
   </>;
 }
