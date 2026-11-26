@@ -115,16 +115,76 @@ export async function receiveDebtorPayment(input: { debtorId: string; accountId:
   await db.debtorPayments.add({ id: makeId(), ...input });
 }
 
-export async function createReserve(input: Omit<Reserve, 'id' | 'createdAt'>) {
-  if (!input.name.trim() || input.targetCents < 0) throw new Error('Informe nome e uma meta válida.');
-  await db.reserves.add({ ...input, id: makeId(), createdAt: new Date().toISOString() });
+export async function saveReserve(input: Omit<Reserve, 'id' | 'createdAt'> & { id?: string }) {
+  if (!input.name.trim() || !Number.isSafeInteger(input.targetCents) || input.targetCents < 0) throw new Error('Informe nome e uma meta válida.');
+  const annualYieldPercent = input.annualYieldPercent ?? 0;
+  if (!Number.isFinite(annualYieldPercent) || annualYieldPercent < 0 || annualYieldPercent > 100) throw new Error('Informe um rendimento anual entre 0% e 100%.');
+  const existing = input.id ? await db.reserves.get(input.id) : undefined;
+  if (input.id && !existing) throw new Error('Caixinha não encontrada.');
+  if (existing) await processReserveYields();
+  const value: Reserve = {
+    ...existing,
+    ...input,
+    id: input.id ?? makeId(),
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    annualYieldPercent,
+    lastYieldDate: today(),
+  };
+  await db.reserves.put(value);
+}
+
+function reserveMovementDelta(type: 'deposit' | 'withdrawal' | 'yield', amountCents: number) {
+  return type === 'withdrawal' ? -amountCents : amountCents;
+}
+
+export async function processReserveYields(referenceDate = today()) {
+  const reserves = await db.reserves.toArray();
+  let processed = 0;
+  await db.transaction('rw', db.reserves, db.reserveMovements, async () => {
+    for (const reserve of reserves) {
+      const lastDate = reserve.lastYieldDate ?? reserve.createdAt.slice(0, 10);
+      if (lastDate >= referenceDate) continue;
+      const moves = await db.reserveMovements.where('reserveId').equals(reserve.id).toArray();
+      let balance = moves
+        .filter((move) => move.date <= lastDate)
+        .reduce((sum, move) => sum + reserveMovementDelta(move.type, move.amountCents), 0);
+      const annualRate = reserve.annualYieldPercent ?? 0;
+      const dailyRate = annualRate > 0 ? Math.pow(1 + annualRate / 100, 1 / 365) - 1 : 0;
+      const cursor = new Date(`${lastDate}T00:00:00.000Z`);
+      while (true) {
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+        const date = cursor.toISOString().slice(0, 10);
+        if (date > referenceDate) break;
+        for (const move of moves) {
+          if (move.date === date) balance += reserveMovementDelta(move.type, move.amountCents);
+        }
+        if (dailyRate > 0 && balance > 0) {
+          const amountCents = Math.round(balance * dailyRate);
+          if (amountCents > 0) {
+            await db.reserveMovements.add({
+              id: makeId(),
+              reserveId: reserve.id,
+              type: 'yield',
+              amountCents,
+              date,
+              notes: 'Rendimento diário automático',
+            });
+            balance += amountCents;
+            processed += 1;
+          }
+        }
+      }
+      await db.reserves.update(reserve.id, { lastYieldDate: referenceDate });
+    }
+  });
+  return processed;
 }
 
 export async function moveReserve(input: { reserveId: string; type: 'deposit' | 'withdrawal'; amountCents: number; date: string; notes?: string }) {
   const reserve = await db.reserves.get(input.reserveId);
   if (!reserve) throw new Error('Caixinha não encontrada.');
   const moves = await db.reserveMovements.where('reserveId').equals(input.reserveId).toArray();
-  const balance = moves.reduce((sum, item) => sum + (item.type === 'deposit' ? item.amountCents : -item.amountCents), 0);
+  const balance = moves.reduce((sum, item) => sum + reserveMovementDelta(item.type, item.amountCents), 0);
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor válido.');
   if (input.type === 'withdrawal' && input.amountCents > balance) throw new Error('A retirada não pode superar o valor reservado.');
   await db.reserveMovements.add({ id: makeId(), ...input });
