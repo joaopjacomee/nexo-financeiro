@@ -1,6 +1,6 @@
 import type { Account, Card, Debtor, Installment, Reserve, Transaction } from '../types';
 import { db } from './db';
-import { calculateAvailableCardLimit, calculateMonthlyFreeCents } from './calculations';
+import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents } from './calculations';
 import { thisMonth, today } from './format';
 
 export interface AccountBalance { account: Account; balanceCents: number; }
@@ -62,8 +62,8 @@ export async function getMonthSummary(month: string): Promise<MonthSummary> {
   const paidCashExpensesCents = expenses.filter((tx) => tx.status === 'paid').reduce((sum, tx) => sum + tx.amountCents, 0);
   const pendingExpensesCents = expenses.filter((tx) => tx.status === 'pending' || tx.status === 'receivable').reduce((sum, tx) => sum + tx.amountCents, 0);
   const installmentTotal = installments.reduce((sum, item) => sum + item.amountCents, 0);
-  const reserveDepositsCents = reserveMovements.filter((item) => item.type === 'deposit').reduce((sum, item) => sum + item.amountCents, 0);
-  const reserveWithdrawalsCents = reserveMovements.filter((item) => item.type === 'withdrawal').reduce((sum, item) => sum + item.amountCents, 0);
+  const reserveDepositsCents = reserveMovements.reduce((sum, item) => sum + Math.max(0, item.availableBalanceImpactCents ?? 0), 0);
+  const reserveWithdrawalsCents = reserveMovements.reduce((sum, item) => sum + Math.max(0, -(item.availableBalanceImpactCents ?? 0)), 0);
   const allCashExpenses = expenses.reduce((sum, tx) => sum + tx.amountCents, 0);
   const allIncome = incomes.reduce((sum, tx) => sum + tx.amountCents, 0);
   const freeCents = calculateMonthlyFreeCents({ incomeCents: allIncome, cashExpensesCents: allCashExpenses, installmentsCents: installmentTotal, reserveDepositsCents, reserveWithdrawalsCents });
@@ -92,15 +92,19 @@ export async function getDebtorMetrics() {
 }
 
 export async function getPatrimony() {
-  const [balances, cardMetrics, investments, debtorMetrics, reserves] = await Promise.all([
-    getAccountBalances(), getCardMetrics(), db.investments.toArray(), getDebtorMetrics(), getReserveBalances(),
+  const [balances, cardMetrics, investments, debtorMetrics, reserves, reserveMovements] = await Promise.all([
+    getAccountBalances(), getCardMetrics(), db.investments.toArray(), getDebtorMetrics(), getReserveBalances(), db.reserveMovements.toArray(),
   ]);
   const cash = balances.reduce((sum, item) => sum + item.balanceCents, 0);
   const investmentsTotal = investments.reduce((sum, item) => sum + item.balanceCents, 0);
   const receivable = debtorMetrics.reduce((sum, item) => sum + item.remainingCents, 0);
   const cardCommitments = cardMetrics.reduce((sum, item) => sum + item.usedCents, 0);
   const reserved = reserves.reduce((sum, item) => sum + item.balanceCents, 0);
-  return { cash, investmentsTotal, receivable, cardCommitments, reserved, netWorth: cash + investmentsTotal + receivable - cardCommitments, freeCash: cash - reserved };
+  const freeCash = calculateFreeCashCents(cash, reserveMovements.map((item) => ({
+    reserveId: item.reserveId,
+    impactCents: item.availableBalanceImpactCents ?? 0,
+  })));
+  return { cash, investmentsTotal, receivable, cardCommitments, reserved, netWorth: cash + investmentsTotal + receivable - cardCommitments, freeCash };
 }
 
 export async function getCategorySpend(month: string) {
