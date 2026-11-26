@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import { thisMonth } from './format';
+import { firstUsageMonth } from './format';
 import type {
   Account, Card, Category, CdiAccrual, CdiRate, Debtor, DebtorPayment, Installment, Investment,
   InvestmentMovement, InvoicePayment, MonthRecord, MonthlyBudget, Purchase, Reserve, ReserveMovement,
@@ -87,10 +87,10 @@ export async function initializeDatabase() {
       { name: 'Cartão NuBank', institution: 'NuBank', color: '#7c3aed' },
     ];
     await db.cards.bulkPut(initialCards.map((card) => ({
-      id: `default-card-${card.institution.toLowerCase()}`, ...card, brand: 'Não informada', limitCents: 0, closingDay: 1, dueDay: 10, createdAt: new Date().toISOString(),
+      id: `default-card-${card.institution.toLowerCase()}`, ...card, brand: 'Não informada', kind: 'credit' as const, limitCents: 0, closingDay: 1, dueDay: 10, createdAt: new Date().toISOString(),
     })).filter((card) => banks.some((bank) => bank.institution === card.institution)));
   }
-  const currentMonth = thisMonth();
+  const currentMonth = firstUsageMonth();
   if (!(await db.months.get(currentMonth))) {
     await db.months.put({ id: currentMonth, month: currentMonth, createdAt: new Date().toISOString() });
   }
