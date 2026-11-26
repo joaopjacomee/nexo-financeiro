@@ -23,3 +23,20 @@
 .dashboard-comparison-chart{margin:0 0 16px}.dashboard-comparison-chart .recharts-cartesian-axis-tick text{font-size:10px}.debtor-payment-row{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-top:5px;border-top:1px solid #eee8f5;color:#81768f;font-size:9px}.debtor-payment-row .icon-button{flex-shrink:0}
 
 .action-toast{position:fixed;right:24px;bottom:24px;z-index:1000;display:flex;align-items:center;gap:10px;max-width:min(440px,calc(100vw - 32px));padding:13px 17px;border-radius:12px;background:#fff;box-shadow:0 10px 35px #24123725;border:1px solid #eee8f5;color:#4d3b60;font:600 12px system-ui;animation:toast-in .18s ease-out}.action-toast.success svg{color:#15966b}.action-toast.error{border-color:#f3c8d1;color:#a83e59}.action-toast.error svg{color:#c34f6d}@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* Wishlist, action history, and reserve card spacing */
+.wishlist-layout{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.wishlist-initial-form{display:flex;align-items:flex-end;gap:12px}
+.wishlist-initial-form .form-field{flex:1;margin:0}
+.wishlist-initial-form .btn{white-space:nowrap}
+.reserve-card{display:flex;flex-direction:column;gap:9px;min-width:0}
+.reserve-card h3{margin:4px 0 0}
+.reserve-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:auto;padding-top:8px}
+.reserve-actions .btn{flex:1 1 82px;min-width:0;justify-content:center}
+.history-action:disabled{opacity:.32;cursor:not-allowed;background:transparent;box-shadow:none}
+@media(max-width:700px){
+  .wishlist-layout{grid-template-columns:1fr}
+  .wishlist-initial-form{align-items:stretch;flex-direction:column}
+  .wishlist-initial-form .btn{width:100%;justify-content:center}
+  .reserve-actions .btn{flex:1 1 42%}
+}
