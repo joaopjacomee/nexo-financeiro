@@ -271,12 +271,14 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     const categoryId = String(payload.get('categoryId') || '') || undefined;
     const notes = String(payload.get('notes') || '');
     const expenseClass = String(payload.get('expenseClass') || 'Essencial') as Transaction['expenseClass'];
+    const splitPerson = type === 'expense' && paymentMode !== 'card-credit' ? String(payload.get('splitPerson') || '').trim() : '';
+    const sharedWith = splitPerson ? { person: splitPerson, amountCents: toCents(String(payload.get('splitAmount') || '0')) } : undefined;
     if (editing?.paymentMode === 'card-credit') { await act(async () => { throw new Error('Para alterar uma compra parcelada, exclua o parcelamento atual e registre a compra novamente.'); }); return; }
     const ok = await act(() => paymentMode === 'card-credit'
       ? createCardPurchase({ description: String(payload.get('description') ?? ''), totalCents: toCents(raw), cardId: String(payload.get('cardId') || ''), installmentsCount: Number(payload.get('installmentsCount') || 1), purchaseDate: String(payload.get('date')), firstDueMonth: String(payload.get('firstDueMonth') || addMonths(String(payload.get('date')).slice(0, 7), 1)), categoryId, expenseClass, notes })
-      : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, notes }),
-      editing ? 'Movimentação atualizada.' : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
-    if (ok) { const savedMonth = String(payload.get('date') ?? '').slice(0, 7); if (/^\\d{4}-\\d{2}$/.test(savedMonth)) setMonth(savedMonth); setModal(false); setEditing(null); }
+      : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, notes, sharedWith }),
+      editing ? 'Movimentação atualizada.' : splitPerson ? `Despesa registrada; a parte de ${splitPerson} foi adicionada a Devedores.` : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
+    if (ok) { const savedMonth = String(payload.get('date') ?? '').slice(0, 7); if (/^\d{4}-\d{2}$/.test(savedMonth)) setMonth(savedMonth); setModal(false); setEditing(null); }
   };
   const accountName = (id?: string) => data.accounts.find((acc) => acc.id === id)?.name ?? '—';
   return <>
@@ -294,7 +296,16 @@ function TransactionModal({ data, month, editing, onClose, onSubmit }: { data: S
   const initialDate = editing?.date ?? (currentDate.slice(0, 7) === month ? currentDate : `${month}-01`);
   const [type, setType] = useState<'income' | 'expense'>(editing?.type ?? 'expense');
   const [mode, setMode] = useState<Transaction['paymentMode']>(editing?.paymentMode ?? 'pix');
+  const existingSplit = editing ? data.debtors.find((item) => item.sharedExpenseId === editing.id) : undefined;
+  const knownPeople = Array.from(new Map(data.debtors.map((item) => {
+    const person = item.person.trim();
+    return [person.toLocaleLowerCase('pt-BR'), person] as const;
+  })).values());
   const [expenseClass, setExpenseClass] = useState<NonNullable<Transaction['expenseClass']>>(editing?.expenseClass ?? 'Essencial');
+  const [splitPerson, setSplitPerson] = useState(existingSplit?.person ?? '');
+  const [amount, setAmount] = useState(editing ? fromCents(editing.amountCents) : '');
+  const totalCents = toCents(amount || '0');
+  const splitAmount = Number.isSafeInteger(totalCents) && totalCents > 0 ? Math.floor(totalCents / 2) : 0;
   const [purchaseDate, setPurchaseDate] = useState(initialDate);
   const [firstDueMonth, setFirstDueMonth] = useState(addMonths(initialDate.slice(0, 7), 1));
   const [saving, setSaving] = useState(false);
@@ -302,11 +313,25 @@ function TransactionModal({ data, month, editing, onClose, onSubmit }: { data: S
   return <Modal title={editing ? 'Editar movimentação' : 'Nova movimentação'} onClose={onClose}><form className="form-grid" onSubmit={onFormSubmit}>
     <Field label="Tipo"><select name="type" value={type} onChange={(e) => { const next = e.target.value as 'income' | 'expense'; setType(next); if (next === 'income' && mode === 'card-credit') setMode('pix'); }}><option value="expense">Despesa</option><option value="income">Receita</option></select></Field>
     <Field label="Descrição" wide><input name="description" required defaultValue={editing?.description}/></Field>
-    <Field label="Valor (R$)"><MoneyInput name="amount" required defaultValue={editing ? fromCents(editing.amountCents) : ''}/></Field>
+    <Field label="Valor total da conta (R$)"><MoneyInput name="amount" required value={amount} onChange={setAmount}/></Field>
     <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required value={purchaseDate} onChange={(e) => { setPurchaseDate(e.target.value); setFirstDueMonth(addMonths(e.target.value.slice(0, 7), 1)); }}/></Field>
     <Field label="Categoria"><select name="categoryId" defaultValue={editing?.categoryId ?? ''}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
     {type === 'expense' && <Field label="Classificação da despesa"><select name="expenseClass" value={expenseClass} onChange={(e) => setExpenseClass(e.target.value as NonNullable<Transaction['expenseClass']>)}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>}
-    <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option>{type === 'expense' && <option value="card-credit">Cartão de crédito</option>}<option value="other">Outro</option></select></Field>
+    <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => { const next = e.target.value as Transaction['paymentMode']; setMode(next); if (next === 'card-credit') setSplitPerson(''); }}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option>{type === 'expense' && <option value="card-credit">Cartão de crédito</option>}<option value="other">Outro</option></select></Field>
+    {type === 'expense' && mode !== 'card-credit' && <>
+      <Field label="Dividir esta conta com">
+        <select name="splitPerson" value={splitPerson} onChange={(e) => setSplitPerson(e.target.value)}>
+          <option value="">Não dividir</option>
+          {knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}>{person}</option>)}
+        </select>
+      </Field>
+      {splitPerson && <>
+        <Field label={`Parte de ${splitPerson} (50%)`}>
+          <input name="splitAmount" value={fromCents(splitAmount)} readOnly/>
+        </Field>
+        <div className="form-footnote"><HandCoins size={15}/> A despesa integral sai da conta. Metade fica registrada como valor a receber de {splitPerson} e poderá ser recebida na área Devedores.</div>
+      </>}
+    </>}
     {mode === 'card-credit' && type === 'expense' && <>
       <Field label="Cartão de crédito"><select name="cardId" required defaultValue={data.cards[0]?.id ?? ''}><option value="">Selecione o cartão</option>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
       <Field label="Quantidade de parcelas"><input name="installmentsCount" type="number" min="1" max="240" defaultValue="1" required/></Field>
