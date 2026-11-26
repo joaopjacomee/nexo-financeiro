@@ -1,5 +1,5 @@
 import { db } from './db';
-import { daysInMonth, makeId, monthOffset } from './format';
+import { daysInMonth, makeId, monthOffset, today } from './format';
 import { allocateInvoicePayment, calculateDailyCdiRate, splitInstallmentCents } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, Transaction } from '../types';
 
@@ -30,7 +30,7 @@ export async function saveAccount(input: Omit<Account, 'id' | 'createdAt'> & { i
 export async function saveCard(input: Omit<Card, 'id' | 'createdAt'> & { id?: string }) {
   if (!input.name.trim()) throw new Error('Informe o nome do cartão.');
   if (input.limitCents < 0 || input.closingDay < 1 || input.closingDay > 31 || input.dueDay < 1 || input.dueDay > 31) throw new Error('Confira limite e dias de fechamento/vencimento.');
-  const value: Card = { ...input, id: input.id ?? makeId(), createdAt: new Date().toISOString() };
+  const value: Card = { ...input, kind: input.kind ?? 'credit', id: input.id ?? makeId(), createdAt: new Date().toISOString() };
   await db.cards.put(value);
   return value;
 }
