@@ -39,7 +39,7 @@ export interface DebtorPayment {
 }
 export interface Reserve {
   id: ID; name: string; targetCents: number; createdAt: string; targetDate?: string; notes?: string; closed?: boolean;
-  annualYieldPercent?: number; lastYieldDate?: string;
+  annualYieldPercent?: number; lastYieldDate?: string; yieldRemainderCents?: number;
 }
 export interface ReserveMovement {
   id: ID; reserveId: ID; type: 'deposit' | 'withdrawal' | 'yield'; amountCents: number; date: string; notes?: string;
