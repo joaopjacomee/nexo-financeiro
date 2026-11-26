@@ -639,6 +639,75 @@ function ReserveMovementModal({ reserveId, type, data, onClose, act }: { reserve
   </div></Modal>;
 }
 
+function WishlistPage({ showValues, revision, act }: CommonProps) {
+  const [initialBalance, setInitialBalance] = useState('0,00');
+  const [items, setItems] = useState<WishlistPurchase[]>([]);
+  const [form, setForm] = useState({ description: '', amount: '', date: today(), notes: '' });
+  useEffect(() => {
+    let active = true;
+    Promise.all([db.settings.get('wishlistInitialCents'), db.wishlistPurchases.orderBy('date').reverse().toArray()])
+      .then(([setting, purchases]) => {
+        if (!active) return;
+        const initial = typeof setting?.value === 'number' ? setting.value : 0;
+        setInitialBalance(fromCents(initial));
+        setItems(purchases);
+      });
+    return () => { active = false; };
+  }, [revision]);
+
+  const initialCents = toCents(initialBalance || '0');
+  const spentCents = items.reduce((sum, item) => sum + item.amountCents, 0);
+  const remainingCents = initialCents - spentCents;
+  const saveInitial = () => act(() => saveWishlistInitialBalance(initialCents), 'Valor inicial da lista salvo.');
+  const addPurchase = () => act(
+    () => createWishlistPurchase({ description: form.description, amountCents: toCents(form.amount), date: form.date, notes: form.notes }),
+    'Compra adicionada à Lista de desejo.',
+  ).then((ok) => { if (ok) setForm({ description: '', amount: '', date: today(), notes: '' }); });
+
+  return <>
+    <PageHeading eyebrow="PLANEJAMENTO PESSOAL" title="Lista de desejo" description="Separe um valor para suas compras desejadas e acompanhe quanto ainda resta, sem interferir no patrimônio."/>
+    <div className="stat-grid stat-grid-three">
+      <StatCard label="Valor inicial" value={money(initialCents)} icon={Wallet} hidden={!showValues}/>
+      <StatCard label="Total de compras" value={money(spentCents)} icon={ShoppingBag} tone="pink" hidden={!showValues}/>
+      <StatCard label="Saldo disponível" value={money(remainingCents)} icon={Target} tone={remainingCents >= 0 ? 'green' : 'pink'} hidden={!showValues}/>
+    </div>
+    <div className="wishlist-layout">
+      <Panel>
+        <PanelHeader title="Definir valor inicial" subtitle="Esse valor é exclusivo da sua lista e não entra no cálculo do patrimônio."/>
+        <div className="wishlist-initial-form">
+          <Field label="Valor disponível para desejos (R$)">
+            <MoneyInput value={initialBalance} onChange={setInitialBalance}/>
+          </Field>
+          <Button onClick={saveInitial}><Check size={15}/> Salvar valor inicial</Button>
+        </div>
+      </Panel>
+      <Panel>
+        <PanelHeader title="Registrar uma compra" subtitle="Ao registrar uma compra, seu valor será descontado do saldo da lista."/>
+        <div className="form-grid">
+          <Field label="O que você comprou?" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Ex.: Fone de ouvido"/></Field>
+          <Field label="Valor da compra (R$)"><MoneyInput value={form.amount} onChange={(amount) => setForm({ ...form, amount })}/></Field>
+          <Field label="Data"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}/></Field>
+          <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
+          <div className="form-actions field-wide"><Button onClick={addPurchase} disabled={!form.description.trim() || toCents(form.amount || '0') <= 0}><Plus size={15}/> Registrar compra</Button></div>
+        </div>
+      </Panel>
+    </div>
+    <Panel>
+      <PanelHeader title="Histórico de compras" subtitle="Excluir uma compra devolve esse valor ao saldo da lista."/>
+      <div className="table-scroll"><table><thead><tr><th>COMPRA</th><th>DATA</th><th>OBSERVAÇÕES</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>
+        {items.map((item) => <tr key={item.id}>
+          <td><strong>{item.description}</strong></td>
+          <td>{dateBR(item.date)}</td>
+          <td>{item.notes || '—'}</td>
+          <td className="negative">{showValues ? money(item.amountCents) : '••••'}</td>
+          <td><button className="icon-button mini danger-icon" title="Excluir compra" onClick={() => { void act(() => deleteWishlistPurchase(item.id), 'Compra removida e valor devolvido à lista.'); }}><Trash2 size={14}/></button></td>
+        </tr>)}
+      </tbody></table>{!items.length && <TableEmpty text="Nenhuma compra registrada na Lista de desejo."/>}</div>
+    </Panel>
+    <div className="info-note"><ShoppingBag size={17}/><span>A Lista de desejo é independente. O valor inicial e as compras cadastradas aqui não alteram contas bancárias, caixinhas, investimentos ou patrimônio.</span></div>
+  </>;
+}
+
 function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProps) {
   const [spend, setSpend] = useState<Awaited<ReturnType<typeof getCategorySpend>>>([]);
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof getMonthSummary>> | null>(null);
