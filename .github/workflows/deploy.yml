@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: Version service worker cache for this deployment
+        run: sed -i "s/__NEXO_BUILD_ID__/${GITHUB_SHA}/g" public/sw.js
       - run: npm install
       - name: Run finance regression tests
         run: npm test
