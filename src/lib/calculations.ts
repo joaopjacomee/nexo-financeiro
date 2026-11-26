@@ -47,3 +47,27 @@ export function allocateInvoicePayment<T extends { id: string; amountCents: numb
   }
   return { allocations, remainingCents };
 }
+
+/** Bank cash excludes only reserve contributions made after reserve tracking was introduced. */
+export function calculateFreeCashCents(
+  cashCents: number,
+  impacts: Array<{ reserveId: string; impactCents: number }>,
+): number {
+  const byReserve = new Map<string, number>();
+  for (const movement of impacts) {
+    byReserve.set(movement.reserveId, (byReserve.get(movement.reserveId) ?? 0) + movement.impactCents);
+  }
+  const countedReservedCents = [...byReserve.values()].reduce((sum, balance) => sum + Math.max(0, balance), 0);
+  return cashCents - countedReservedCents;
+}
+
+/** A withdrawal releases only the part of the reserve that was funded by new deposits. */
+export function calculateReserveWithdrawalImpactCents(withdrawalCents: number, countedReserveCents: number): number {
+  if (!Number.isSafeInteger(withdrawalCents) || withdrawalCents < 0) throw new Error('Valor de retirada inválido.');
+  return -Math.min(withdrawalCents, Math.max(0, countedReserveCents));
+}
+
+/** Wishlist spending is independent from cash, investments, and patrimony. */
+export function calculateWishlistRemainingCents(initialCents: number, purchasesCents: number[]): number {
+  return initialCents - purchasesCents.reduce((sum, amount) => sum + amount, 0);
+}
