@@ -107,10 +107,14 @@ export async function saveCard(input: Omit<Card, 'id' | 'createdAt'> & { id?: st
 
 export async function createCardPurchase(input: {
   description: string; totalCents: number; cardId: string; categoryId?: string; expenseClass?: Transaction['expenseClass']; purchaseDate: string; firstDueMonth: string; installmentsCount: number; notes?: string;
+  sharedWith?: { person: string; amountCents: number };
 }) {
   if (!input.description.trim()) throw new Error('Informe a descrição da compra.');
   if (!Number.isSafeInteger(input.totalCents) || input.totalCents <= 0) throw new Error('Valor da compra inválido.');
   if (!Number.isInteger(input.installmentsCount) || input.installmentsCount < 1 || input.installmentsCount > 240) throw new Error('Quantidade de parcelas inválida (1 a 240).');
+  if (input.sharedWith && (!Number.isSafeInteger(input.sharedWith.amountCents) || input.sharedWith.amountCents <= 0 || input.sharedWith.amountCents >= input.totalCents)) {
+    throw new Error('A parte da outra pessoa precisa ser maior que zero e menor que o total da compra.');
+  }
   const card = await db.cards.get(input.cardId);
   if (!card) throw new Error('Cartão não encontrado.');
   const committed = await db.installments.where('cardId').equals(card.id).toArray();
@@ -118,6 +122,13 @@ export async function createCardPurchase(input: {
   if (card.limitCents > 0 && input.totalCents + currentCommitment > card.limitCents) {
     throw new Error(`A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ${((card.limitCents - currentCommitment) / 100).toFixed(2)}.`);
   }
+  const normalizePerson = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
+  const people = input.sharedWith ? await db.debtors.toArray() : [];
+  const personRecord = input.sharedWith
+    ? people.find((item) => normalizePerson(item.person) === normalizePerson(input.sharedWith!.person))
+    : undefined;
+  if (input.sharedWith && !personRecord) throw new Error('Selecione uma pessoa já cadastrada em Devedores.');
+
   const purchaseId = makeId();
   const purchase = {
     id: purchaseId, description: input.description.trim(), totalCents: input.totalCents, cardId: input.cardId,
@@ -134,10 +145,25 @@ export async function createCardPurchase(input: {
       dueDate: `${dueMonth}-${String(day).padStart(2, '0')}`,
     };
   });
-  await db.transaction('rw', db.purchases, db.installments, db.months, async () => {
+  await db.transaction('rw', db.purchases, db.installments, db.months, db.debtors, async () => {
     await db.purchases.add(purchase);
     await db.installments.bulkAdd(installments);
     await db.months.bulkPut([...new Set(installments.map((item) => item.dueMonth))].map((month) => ({ id: month, month, createdAt: new Date().toISOString() })));
+    if (input.sharedWith && personRecord) {
+      const sharedDebtor: Debtor = {
+        id: makeId(),
+        person: personRecord.person.trim(),
+        description: `Divisão da conta: ${purchase.description}`,
+        originalCents: input.sharedWith.amountCents,
+        originDate: input.purchaseDate,
+        categoryId: input.categoryId,
+        originalPayment: 'Cartão de crédito',
+        notes: input.notes,
+        sharedPurchaseId: purchaseId,
+        createdAt: new Date().toISOString(),
+      };
+      await db.debtors.add(sharedDebtor);
+    }
   });
 }
 
@@ -473,6 +499,8 @@ export async function deleteDebtorPayment(paymentId: string) {
 
 
 export async function deletePurchase(purchaseId: string) {
+  const sharedDebtor = await db.debtors.filter((item) => item.sharedPurchaseId === purchaseId).first();
+  if (sharedDebtor) await deleteDebtor(sharedDebtor.id);
   const installments = await db.installments.where('purchaseId').equals(purchaseId).toArray();
   const installmentIds = new Set(installments.map((item) => item.id));
   const payments = await db.invoicePayments.toArray();
