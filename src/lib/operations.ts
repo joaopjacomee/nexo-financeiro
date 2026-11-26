@@ -1,6 +1,6 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
-import { allocateInvoicePayment, calculateDailyCdiRate, splitInstallmentCents } from './calculations';
+import { allocateInvoicePayment, calculateDailyCdiRate, calculateReserveWithdrawalImpactCents, splitInstallmentCents } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, Transaction } from '../types';
 
 export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt' | 'month'> & {
@@ -325,9 +325,13 @@ export async function moveReserve(input: { reserveId: string; type: 'deposit' | 
   if (!reserve) throw new Error('Caixinha não encontrada.');
   const moves = await db.reserveMovements.where('reserveId').equals(input.reserveId).toArray();
   const balance = moves.reduce((sum, item) => sum + reserveMovementDelta(item.type, item.amountCents), 0);
+  const countedBalance = moves.reduce((sum, item) => sum + (item.availableBalanceImpactCents ?? 0), 0);
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor válido.');
   if (input.type === 'withdrawal' && input.amountCents > balance) throw new Error('A retirada não pode superar o valor reservado.');
-  await db.reserveMovements.add({ id: makeId(), ...input });
+  const availableBalanceImpactCents = input.type === 'deposit'
+    ? input.amountCents
+    : calculateReserveWithdrawalImpactCents(input.amountCents, countedBalance);
+  await db.reserveMovements.add({ id: makeId(), ...input, availableBalanceImpactCents });
 }
 
 export async function createInvestment(input: Omit<Investment, 'id' | 'balanceCents' | 'createdAt'>) {
@@ -419,7 +423,7 @@ export async function exportBackup() {
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
-    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
   const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 1, exportedAt: new Date().toISOString() };
   for (const table of tables) payload[table] = await db.table(table).toArray();
@@ -597,6 +601,25 @@ export async function deleteAccount(accountId: string) {
     }
     await db.accounts.delete(accountId);
   });
+}
+
+
+const WISHLIST_INITIAL_KEY = 'wishlistInitialCents';
+
+export async function saveWishlistInitialBalance(initialCents: number) {
+  if (!Number.isSafeInteger(initialCents) || initialCents < 0) throw new Error('Informe um valor inicial válido.');
+  await db.settings.put({ key: WISHLIST_INITIAL_KEY, value: initialCents });
+}
+
+export async function createWishlistPurchase(input: { description: string; amountCents: number; date: string; notes?: string }) {
+  if (!input.description.trim()) throw new Error('Informe o nome da compra desejada.');
+  if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor de compra válido.');
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(input.date)) throw new Error('Informe uma data válida.');
+  await db.wishlistPurchases.add({ id: makeId(), ...input, description: input.description.trim(), createdAt: new Date().toISOString() });
+}
+
+export async function deleteWishlistPurchase(purchaseId: string) {
+  await db.wishlistPurchases.delete(purchaseId);
 }
 
 export async function clearTestData() {
