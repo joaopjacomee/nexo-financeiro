@@ -72,3 +72,15 @@ export function calculateReserveWithdrawalImpactCents(withdrawalCents: number, c
 export function calculateWishlistRemainingCents(initialCents: number, purchasesCents: number[]): number {
   return initialCents - purchasesCents.reduce((sum, amount) => sum + amount, 0);
 }
+
+
+/** Finance starts in December 2026. Earlier expense entries are setup records. */
+export const FINANCIAL_START_MONTH = '2026-12';
+
+export function isMonthInAccountingPeriod(month: string): boolean {
+  return /^\\d{4}-\\d{2}$/.test(month) && month >= FINANCIAL_START_MONTH;
+}
+
+export function isExpenseInAccountingPeriod(date: string): boolean {
+  return /^\\d{4}-\\d{2}-\\d{2}$/.test(date) && date.slice(0, 7) >= FINANCIAL_START_MONTH;
+}
