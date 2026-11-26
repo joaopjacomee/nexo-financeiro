@@ -10,7 +10,9 @@ import {
   calculateMonthlyFreeCents,
   calculateReserveRemaining,
   splitInstallmentCents,
-  FINANCIAL_START_MONTH,\n  isMonthInAccountingPeriod,\n  isExpenseInAccountingPeriod,
+  FINANCIAL_START_MONTH,
+  isMonthInAccountingPeriod,
+  isExpenseInAccountingPeriod,
 } from '../.tmp-tests/calculations.js';
 
 test('divisão de compra em seis parcelas preserva o total', () => {
