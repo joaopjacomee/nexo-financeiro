@@ -4,6 +4,9 @@ import {
   allocateInvoicePayment,
   calculateAvailableCardLimit,
   calculateDailyCdiRate,
+  calculateFreeCashCents,
+  calculateReserveWithdrawalImpactCents,
+  calculateWishlistRemainingCents,
   calculateMonthlyFreeCents,
   calculateReserveRemaining,
   splitInstallmentCents,
@@ -71,4 +74,26 @@ test('pagamento excedente é detectável sem criar saldo negativo', () => {
   const result = allocateInvoicePayment([{ id: 'parcela-1', amountCents: 20000, paidCents: 0 }], 25000);
   assert.equal(result.allocations[0].amountCents, 20000);
   assert.equal(result.remainingCents, 5000);
+});
+
+
+test('saldo livre ignora a reserva inicial e desconta somente novos aportes líquidos', () => {
+  const free = calculateFreeCashCents(732795, [
+    { reserveId: 'caixinha-1', impactCents: 0 }, // valor que já estava reservado antes do controle
+    { reserveId: 'caixinha-1', impactCents: 10000 },
+    { reserveId: 'caixinha-1', impactCents: -4000 },
+    { reserveId: 'caixinha-2', impactCents: 5000 },
+  ]);
+  assert.equal(free, 721795);
+});
+
+test('retirada libera somente a parte formada por aportes novos', () => {
+  assert.equal(calculateReserveWithdrawalImpactCents(7000, 3000), -3000);
+  assert.equal(calculateReserveWithdrawalImpactCents(2000, 8000), -2000);
+  assert.equal(calculateReserveWithdrawalImpactCents(2000, 0), 0);
+});
+
+test('lista de desejo desconta compras do valor inicial sem interferir no patrimônio', () => {
+  assert.equal(calculateWishlistRemainingCents(50000, [12000, 8500]), 29500);
+  assert.equal(calculateWishlistRemainingCents(10000, [12000]), -2000);
 });
