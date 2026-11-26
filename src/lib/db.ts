@@ -100,4 +100,16 @@ export async function initializeDatabase() {
     await db.months.put({ id: currentMonth, month: currentMonth, createdAt: new Date().toISOString() });
   }
   if (!(await db.settings.get('privacyNoticeDismissed'))) await db.settings.put({ key: 'privacyNoticeDismissed', value: false });
+
+  // Preserve the reserve balance that already existed when this accounting rule
+  // was introduced. Only deposits made after this one-time migration reduce free cash.
+  if (!(await db.settings.get('reserveBalanceTrackingInitialized'))) {
+    await db.transaction('rw', db.settings, db.reserveMovements, async () => {
+      const existingMovements = await db.reserveMovements.toArray();
+      for (const movement of existingMovements) {
+        await db.reserveMovements.update(movement.id, { availableBalanceImpactCents: 0 });
+      }
+      await db.settings.put({ key: 'reserveBalanceTrackingInitialized', value: true });
+    });
+  }
 }
