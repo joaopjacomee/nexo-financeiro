@@ -3,27 +3,47 @@ import { daysInMonth, makeId, monthOffset, today } from './format';
 import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, isBrazilBankBusinessDay, splitInstallmentCents, FINANCIAL_START_MONTH } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction } from '../types';
 
+type SharedDebtInput = { id?: string; person: string; amountCents: number };
+function normalizeSharedDebtInputs(value?: SharedDebtInput | SharedDebtInput[]): SharedDebtInput[] {
+  if (value === undefined || value === null) return [];
+  return (Array.isArray(value) ? value : [value]).map((item) => ({
+    id: item.id,
+    person: typeof item.person === 'string' ? item.person.trim() : '',
+    amountCents: Number(item.amountCents),
+  }));
+}
+function validateSharedDebtInputs(links: SharedDebtInput[], totalCents: number) {
+  const people = new Set<string>();
+  let allocatedCents = 0;
+  for (const link of links) {
+    const key = link.person.trim().toLocaleLowerCase('pt-BR');
+    if (!key) throw new Error('Informe o nome de cada pessoa vinculada.');
+    if (people.has(key)) throw new Error('Cada pessoa só pode aparecer uma vez nesta divisão.');
+    people.add(key);
+    if (!Number.isSafeInteger(link.amountCents) || link.amountCents <= 0) {
+      throw new Error('Informe um valor válido para cada pessoa vinculada.');
+    }
+    allocatedCents += link.amountCents;
+    if (!Number.isSafeInteger(allocatedCents) || allocatedCents > totalCents) {
+      throw new Error('A soma dos valores vinculados não pode superar o total da compra ou despesa.');
+    }
+  }
+}
+
+
 export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt' | 'month'> & {
   id?: string;
-  sharedWith?: { person: string; amountCents: number };
+  sharedWith?: SharedDebtInput | SharedDebtInput[];
 }) {
   const { sharedWith, ...transactionInput } = input;
+  const sharedLinks = normalizeSharedDebtInputs(sharedWith);
   if (!transactionInput.description.trim()) throw new Error('Informe uma descrição.');
   if (!Number.isSafeInteger(transactionInput.amountCents) || transactionInput.amountCents <= 0) throw new Error('Informe um valor válido maior que zero.');
   if (transactionInput.status !== 'cancelled' && !['other', 'reserve-plans'].includes(transactionInput.paymentMode) && !transactionInput.accountId) throw new Error('Selecione a conta utilizada.');
   if (transactionInput.paymentMode === 'reserve-plans' && transactionInput.type !== 'expense') throw new Error('Reserva de planos só pode ser usada em despesas.');
-  if (sharedWith && transactionInput.type !== 'expense') throw new Error('Somente despesas podem ser divididas.');
-  if (sharedWith && transactionInput.paymentMode === 'card-credit') throw new Error('A divisão está disponível para despesas fora do cartão de crédito.');
-  if (sharedWith && (!Number.isSafeInteger(sharedWith.amountCents) || sharedWith.amountCents <= 0 || sharedWith.amountCents >= transactionInput.amountCents)) {
-    throw new Error('A parte da outra pessoa precisa ser maior que zero e menor que o total da despesa.');
-  }
-
-  const normalizePerson = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
-  const people = sharedWith ? await db.debtors.toArray() : [];
-  const personRecord = sharedWith
-    ? people.find((item) => normalizePerson(item.person) === normalizePerson(sharedWith.person))
-    : undefined;
-  if (sharedWith && !personRecord) throw new Error('Selecione uma pessoa já cadastrada em Devedores.');
+  if (sharedLinks.length && transactionInput.type !== 'expense') throw new Error('Somente despesas podem ter valores vinculados a receber.');
+  if (sharedLinks.length && transactionInput.paymentMode === 'card-credit') throw new Error('Registre compras no crédito pela opção de parcelamento.');
+  validateSharedDebtInputs(sharedLinks, transactionInput.amountCents);
 
   const value: Transaction = {
     ...transactionInput,
@@ -32,12 +52,53 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     createdAt: new Date().toISOString(),
   };
   const existingShared = transactionInput.id
-    ? await db.debtors.filter((item) => item.sharedExpenseId === transactionInput.id).first()
-    : undefined;
-  const existingPayments = existingShared
-    ? await db.debtorPayments.where('debtorId').equals(existingShared.id).toArray()
+    ? await db.debtors.where('sharedExpenseId').equals(transactionInput.id).toArray()
     : [];
-  const alreadyReceivedCents = existingPayments.reduce((sum, payment) => sum + payment.amountCents, 0);
+  const allDebtorPayments = existingShared.length ? await db.debtorPayments.toArray() : [];
+  const normalizePerson = (name: string) => name.trim().toLocaleLowerCase('pt-BR');
+  const retainedDebtorIds = new Set<string>();
+  const sharedDebtorRows: Debtor[] = [];
+
+  for (const link of sharedLinks) {
+    const existingById = link.id ? existingShared.find((item) => item.id === link.id) : undefined;
+    if (link.id && !existingById) throw new Error('Uma das dívidas vinculadas não pertence a esta despesa.');
+    const existing = existingById ?? existingShared.find((item) =>
+      !retainedDebtorIds.has(item.id) && normalizePerson(item.person) === normalizePerson(link.person)
+    );
+    const receivedCents = existing
+      ? allDebtorPayments.filter((payment) => payment.debtorId === existing.id).reduce((sum, payment) => sum + payment.amountCents, 0)
+      : 0;
+    if (existing && receivedCents > link.amountCents) {
+      throw new Error('O valor devido a ' + existing.person + ' não pode ser menor que o que já foi recebido.');
+    }
+    if (existing && receivedCents > 0 && normalizePerson(existing.person) !== normalizePerson(link.person)) {
+      throw new Error('Esta pessoa já recebeu parte da dívida. Não é possível trocar seu nome neste vínculo.');
+    }
+    const id = existing?.id ?? makeId();
+    retainedDebtorIds.add(id);
+    sharedDebtorRows.push({
+      id,
+      person: link.person,
+      description: 'Divisão da conta: ' + value.description.trim(),
+      originalCents: link.amountCents,
+      originDate: value.date,
+      categoryId: value.categoryId,
+      originalPayment: 'Conta dividida',
+      originAccountId: value.accountId,
+      notes: value.notes,
+      sharedExpenseId: value.id,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+    });
+  }
+
+  for (const existing of existingShared) {
+    if (retainedDebtorIds.has(existing.id)) continue;
+    const receivedCents = allDebtorPayments.filter((payment) => payment.debtorId === existing.id).reduce((sum, payment) => sum + payment.amountCents, 0);
+    if (receivedCents > 0) {
+      throw new Error('A dívida de ' + existing.person + ' já recebeu pagamentos. Não é possível removê-la desta despesa.');
+    }
+  }
+
   const existingReserveMovement = transactionInput.id
     ? await db.reserveMovements.filter((item) => item.linkedTransactionId === transactionInput.id).first()
     : undefined;
@@ -51,16 +112,6 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     if (transactionInput.amountCents > balance + restored) throw new Error('O saldo da caixinha Planos é insuficiente.');
   }
 
-  if (existingShared && sharedWith && normalizePerson(existingShared.person) !== normalizePerson(personRecord!.person) && alreadyReceivedCents > 0) {
-    throw new Error('Esta divisão já tem pagamentos. Não é possível trocar a pessoa depois de receber parte do valor.');
-  }
-  if (existingShared && sharedWith && alreadyReceivedCents > sharedWith.amountCents) {
-    throw new Error('A parte da pessoa não pode ser menor que o valor que ela já pagou.');
-  }
-  if (existingShared && !sharedWith && alreadyReceivedCents > 0) {
-    throw new Error('Esta divisão já tem pagamentos. Remova ou ajuste os recebimentos antes de desfazer a divisão.');
-  }
-
   await db.transaction('rw', [db.transactions, db.months, db.debtors, db.debtorPayments, db.reserves, db.reserveMovements], async () => {
     if (existingReserveMovement) await db.reserveMovements.delete(existingReserveMovement.id);
     const transactionValue: Transaction = {
@@ -71,29 +122,15 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     await db.transactions.put(transactionValue);
     if (plansReserve) await db.reserveMovements.add({
       id: makeId(), reserveId: plansReserve.id, type: 'withdrawal', amountCents: transactionInput.amountCents,
-      date: transactionInput.date, notes: `Despesa: ${transactionInput.description.trim()}`, linkedTransactionId: transactionValue.id,
+      date: transactionInput.date, notes: 'Despesa: ' + transactionInput.description.trim(), linkedTransactionId: transactionValue.id,
       availableBalanceImpactCents: -transactionInput.amountCents,
     });
     await db.months.put({ id: value.month, month: value.month, createdAt: new Date().toISOString() });
-
-    if (sharedWith && personRecord) {
-      const sharedDebtor: Debtor = {
-        id: existingShared?.id ?? makeId(),
-        person: personRecord.person.trim(),
-        description: `Divisão da conta: ${value.description.trim()}`,
-        originalCents: sharedWith.amountCents,
-        originDate: value.date,
-        categoryId: value.categoryId,
-        originalPayment: 'Conta dividida',
-        originAccountId: value.accountId,
-        notes: value.notes,
-        sharedExpenseId: value.id,
-        createdAt: existingShared?.createdAt ?? new Date().toISOString(),
-      };
-      await db.debtors.put(sharedDebtor);
-    } else if (existingShared) {
-      await db.debtors.delete(existingShared.id);
-      await db.debtorPayments.where('debtorId').equals(existingShared.id).delete();
+    if (sharedDebtorRows.length) await db.debtors.bulkPut(sharedDebtorRows);
+    const removedIds = existingShared.filter((item) => !retainedDebtorIds.has(item.id)).map((item) => item.id);
+    if (removedIds.length) {
+      await db.debtors.bulkDelete(removedIds);
+      await db.debtorPayments.where('debtorId').anyOf(removedIds).delete();
     }
   });
 
@@ -101,11 +138,16 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
 }
 
 export async function deleteTransaction(id: string) {
-  const debtor = await db.debtors.filter((item) => item.linkedTransactionId === id || item.sharedExpenseId === id).first();
+  const sharedDebtors = await db.debtors.where('sharedExpenseId').equals(id).toArray();
+  if (sharedDebtors.length) {
+    for (const debtor of sharedDebtors) await deleteDebtor(debtor.id);
+    await db.reserveMovements.filter((item) => item.linkedTransactionId === id).delete();
+    await db.transactions.delete(id);
+    return;
+  }
+  const debtor = await db.debtors.filter((item) => item.linkedTransactionId === id).first();
   if (debtor) {
-    const isSharedExpense = debtor.sharedExpenseId === id;
     await deleteDebtor(debtor.id);
-    if (isSharedExpense) await db.transactions.delete(id);
     await db.reserveMovements.filter((item) => item.linkedTransactionId === id).delete();
     return;
   }
@@ -133,33 +175,27 @@ export async function saveCard(input: Omit<Card, 'id' | 'createdAt'> & { id?: st
 
 export async function createCardPurchase(input: {
   description: string; totalCents: number; cardId: string; categoryId?: string; expenseClass?: Transaction['expenseClass']; purchaseDate: string; firstDueMonth: string; installmentsCount: number; notes?: string;
-  sharedWith?: { person: string; amountCents: number };
+  sharedWith?: SharedDebtInput | SharedDebtInput[];
 }) {
   if (!input.description.trim()) throw new Error('Informe a descrição da compra.');
   if (!Number.isSafeInteger(input.totalCents) || input.totalCents <= 0) throw new Error('Valor da compra inválido.');
   if (!Number.isInteger(input.installmentsCount) || input.installmentsCount < 1 || input.installmentsCount > 240) throw new Error('Quantidade de parcelas inválida (1 a 240).');
-  if (input.sharedWith && (!Number.isSafeInteger(input.sharedWith.amountCents) || input.sharedWith.amountCents <= 0 || input.sharedWith.amountCents >= input.totalCents)) {
-    throw new Error('A parte da outra pessoa precisa ser maior que zero e menor que o total da compra.');
-  }
+  const sharedLinks = normalizeSharedDebtInputs(input.sharedWith);
+  validateSharedDebtInputs(sharedLinks, input.totalCents);
   const card = await db.cards.get(input.cardId);
   if (!card) throw new Error('Cartão não encontrado.');
   const committed = await db.installments.where('cardId').equals(card.id).toArray();
   const currentCommitment = committed.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
   if (card.limitCents > 0 && input.totalCents + currentCommitment > card.limitCents) {
-    throw new Error(`A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ${((card.limitCents - currentCommitment) / 100).toFixed(2)}.`);
+    throw new Error('A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
   }
-  const normalizePerson = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
-  const people = input.sharedWith ? await db.debtors.toArray() : [];
-  const personRecord = input.sharedWith
-    ? people.find((item) => normalizePerson(item.person) === normalizePerson(input.sharedWith!.person))
-    : undefined;
-  if (input.sharedWith && !personRecord) throw new Error('Selecione uma pessoa já cadastrada em Devedores.');
 
   const purchaseId = makeId();
+  const createdAt = new Date().toISOString();
   const purchase = {
     id: purchaseId, description: input.description.trim(), totalCents: input.totalCents, cardId: input.cardId,
     categoryId: input.categoryId, expenseClass: input.expenseClass, purchaseDate: input.purchaseDate, firstDueMonth: input.firstDueMonth,
-    installmentsCount: input.installmentsCount, createdAt: new Date().toISOString(), notes: input.notes,
+    installmentsCount: input.installmentsCount, createdAt, notes: input.notes,
   };
   const installmentAmounts = splitInstallmentCents(input.totalCents, input.installmentsCount);
   const installments = Array.from({ length: input.installmentsCount }, (_, index) => {
@@ -168,36 +204,30 @@ export async function createCardPurchase(input: {
     return {
       id: makeId(), purchaseId, cardId: input.cardId, number: index + 1, count: input.installmentsCount,
       amountCents: installmentAmounts[index], paidCents: 0, dueMonth,
-      dueDate: `${dueMonth}-${String(day).padStart(2, '0')}`,
+      dueDate: dueMonth + '-' + String(day).padStart(2, '0'),
     };
   });
+  const debtors: Debtor[] = sharedLinks.map((link) => ({
+    id: makeId(),
+    person: link.person,
+    description: 'Divisão da conta: ' + purchase.description,
+    originalCents: link.amountCents,
+    originDate: input.purchaseDate,
+    categoryId: input.categoryId,
+    originalPayment: 'Cartão de crédito',
+    notes: input.notes,
+    sharedPurchaseId: purchaseId,
+    createdAt,
+  }));
   await db.transaction('rw', db.purchases, db.installments, db.months, db.debtors, async () => {
     await db.purchases.add(purchase);
     await db.installments.bulkAdd(installments);
-    await db.months.bulkPut([...new Set(installments.map((item) => item.dueMonth))].map((month) => ({ id: month, month, createdAt: new Date().toISOString() })));
-    if (input.sharedWith && personRecord) {
-      const sharedDebtor: Debtor = {
-        id: makeId(),
-        person: personRecord.person.trim(),
-        description: `Divisão da conta: ${purchase.description}`,
-        originalCents: input.sharedWith.amountCents,
-        originDate: input.purchaseDate,
-        categoryId: input.categoryId,
-        originalPayment: 'Cartão de crédito',
-        notes: input.notes,
-        sharedPurchaseId: purchaseId,
-        createdAt: new Date().toISOString(),
-      };
-      await db.debtors.add(sharedDebtor);
-    }
+    await db.months.bulkPut([...new Set(installments.map((item) => item.dueMonth))].map((month) => ({ id: month, month, createdAt })));
+    if (debtors.length) await db.debtors.bulkAdd(debtors);
   });
+  return purchase;
 }
 
-
-/**
- * Imports credit-card purchases from the compact JSON format used by Nexo.
- * All rows are validated before one atomic IndexedDB transaction is opened.
- */
 export async function importCardPurchasesFromJson(payload: unknown): Promise<{
   importedCount: number; totalCents: number; cardName: string; firstDueMonth: string; debtorCount: number;
 }> {
@@ -414,11 +444,15 @@ export async function importCardPurchasesFromJson(payload: unknown): Promise<{
  * Update a credit purchase and regenerate its installment schedule.
  * Existing payment allocations are kept attached to their installment IDs.
  */
+/**
+ * Update a credit purchase and regenerate its installment schedule.
+ * Existing payment allocations and all linked debtor/payment records are preserved.
+ */
 export async function updateCardPurchase(input: {
   id: string; description: string; totalCents: number; cardId: string;
   categoryId?: string; expenseClass?: Transaction['expenseClass'];
   purchaseDate: string; firstDueMonth: string; installmentsCount: number;
-  notes?: string; sharedWith?: { person: string; amountCents: number };
+  notes?: string; sharedWith?: SharedDebtInput | SharedDebtInput[];
 }) {
   const purchase = await db.purchases.get(input.id);
   if (!purchase) throw new Error('Compra parcelada não encontrada.');
@@ -436,10 +470,8 @@ export async function updateCardPurchase(input: {
   if (input.expenseClass && !['Investimento', 'Essencial', 'Supérfluo'].includes(input.expenseClass)) {
     throw new Error('Classificação da despesa inválida.');
   }
-  if (input.sharedWith && (!Number.isSafeInteger(input.sharedWith.amountCents)
-    || input.sharedWith.amountCents <= 0 || input.sharedWith.amountCents > input.totalCents)) {
-    throw new Error('O valor a receber precisa ser maior que zero e não pode superar o total da compra.');
-  }
+  const sharedLinks = normalizeSharedDebtInputs(input.sharedWith);
+  validateSharedDebtInputs(sharedLinks, input.totalCents);
 
   const currentInstallments = (await db.installments.where('purchaseId').equals(purchase.id).toArray())
     .sort((a, b) => a.number - b.number);
@@ -452,26 +484,49 @@ export async function updateCardPurchase(input: {
     throw new Error('Esta compra já tem parcelas pagas. Para preservar os pagamentos, não altere o cartão, a quantidade de parcelas ou o mês da primeira fatura.');
   }
 
-  const existingDebtor = await db.debtors.filter((item) => item.sharedPurchaseId === purchase.id).first();
-  const debtorPayments = existingDebtor
-    ? await db.debtorPayments.where('debtorId').equals(existingDebtor.id).toArray()
-    : [];
-  const receivedCents = debtorPayments.reduce((sum, item) => sum + item.amountCents, 0);
-  const normalizePerson = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
-  const allDebtors = await db.debtors.toArray();
-  const personRecord = input.sharedWith
-    ? allDebtors.find((item) => normalizePerson(item.person) === normalizePerson(input.sharedWith!.person))
-    : undefined;
-  if (input.sharedWith && !personRecord) throw new Error('Selecione uma pessoa já cadastrada em Devedores.');
-  if (existingDebtor && receivedCents > 0 && !input.sharedWith) {
-    throw new Error('Esta dívida já recebeu pagamentos. Não é possível remover o vínculo até ajustar os recebimentos.');
+  const existingDebtors = await db.debtors.where('sharedPurchaseId').equals(purchase.id).toArray();
+  const allDebtorPayments = existingDebtors.length ? await db.debtorPayments.toArray() : [];
+  const normalizePerson = (name: string) => name.trim().toLocaleLowerCase('pt-BR');
+  const retainedDebtorIds = new Set<string>();
+  const debtorRows: Debtor[] = [];
+
+  for (const link of sharedLinks) {
+    const existingById = link.id ? existingDebtors.find((item) => item.id === link.id) : undefined;
+    if (link.id && !existingById) throw new Error('Uma das dívidas vinculadas não pertence a esta compra.');
+    const existing = existingById ?? existingDebtors.find((item) =>
+      !retainedDebtorIds.has(item.id) && normalizePerson(item.person) === normalizePerson(link.person)
+    );
+    const receivedCents = existing
+      ? allDebtorPayments.filter((payment) => payment.debtorId === existing.id).reduce((sum, payment) => sum + payment.amountCents, 0)
+      : 0;
+    if (existing && receivedCents > link.amountCents) {
+      throw new Error('O valor devido a ' + existing.person + ' não pode ser menor que o que já foi recebido.');
+    }
+    if (existing && receivedCents > 0 && normalizePerson(existing.person) !== normalizePerson(link.person)) {
+      throw new Error('Esta pessoa já recebeu parte da dívida. Não é possível trocar seu nome neste vínculo.');
+    }
+    const id = existing?.id ?? makeId();
+    retainedDebtorIds.add(id);
+    debtorRows.push({
+      id,
+      person: link.person,
+      description: 'Divisão da conta: ' + input.description.trim(),
+      originalCents: link.amountCents,
+      originDate: input.purchaseDate,
+      categoryId: input.categoryId,
+      originalPayment: 'Cartão de crédito',
+      notes: input.notes,
+      sharedPurchaseId: purchase.id,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+    });
   }
-  if (existingDebtor && input.sharedWith && receivedCents > 0
-    && normalizePerson(existingDebtor.person) !== normalizePerson(personRecord!.person)) {
-    throw new Error('Esta dívida já recebeu pagamentos. Não é possível trocar a pessoa vinculada.');
-  }
-  if (input.sharedWith && receivedCents > input.sharedWith.amountCents) {
-    throw new Error('O valor devido não pode ser menor que o que já foi recebido.');
+
+  for (const existing of existingDebtors) {
+    if (retainedDebtorIds.has(existing.id)) continue;
+    const receivedCents = allDebtorPayments.filter((payment) => payment.debtorId === existing.id).reduce((sum, payment) => sum + payment.amountCents, 0);
+    if (receivedCents > 0) {
+      throw new Error('A dívida de ' + existing.person + ' já recebeu pagamentos. Não é possível removê-la desta compra.');
+    }
   }
 
   const paidByNumber = currentInstallments.map((item) => item.paidCents);
@@ -543,24 +598,11 @@ export async function updateCardPurchase(input: {
     const months = [...new Set(installmentRows.map((item) => item.dueMonth))]
       .map((month) => ({ id: month, month, createdAt: now }));
     await db.months.bulkPut(months);
-
-    if (input.sharedWith && personRecord) {
-      const updatedDebtor: Debtor = {
-        id: existingDebtor?.id ?? makeId(),
-        person: personRecord.person.trim(),
-        description: 'Divisão da conta: ' + newPurchase.description,
-        originalCents: input.sharedWith.amountCents,
-        originDate: input.purchaseDate,
-        categoryId: input.categoryId,
-        originalPayment: 'Cartão de crédito',
-        notes: newPurchase.notes,
-        sharedPurchaseId: purchase.id,
-        createdAt: existingDebtor?.createdAt ?? now,
-      };
-      await db.debtors.put(updatedDebtor);
-    } else if (existingDebtor) {
-      await db.debtorPayments.where('debtorId').equals(existingDebtor.id).delete();
-      await db.debtors.delete(existingDebtor.id);
+    if (debtorRows.length) await db.debtors.bulkPut(debtorRows);
+    const removedDebtorIds = existingDebtors.filter((item) => !retainedDebtorIds.has(item.id)).map((item) => item.id);
+    if (removedDebtorIds.length) {
+      await db.debtors.bulkDelete(removedDebtorIds);
+      await db.debtorPayments.where('debtorId').anyOf(removedDebtorIds).delete();
     }
   });
 
@@ -972,8 +1014,8 @@ export async function deleteDebtorPayment(paymentId: string) {
 
 
 export async function deletePurchase(purchaseId: string) {
-  const sharedDebtor = await db.debtors.filter((item) => item.sharedPurchaseId === purchaseId).first();
-  if (sharedDebtor) await deleteDebtor(sharedDebtor.id);
+  const linkedDebtors = await db.debtors.where('sharedPurchaseId').equals(purchaseId).toArray();
+  for (const debtor of linkedDebtors) await deleteDebtor(debtor.id);
   const installments = await db.installments.where('purchaseId').equals(purchaseId).toArray();
   const installmentIds = new Set(installments.map((item) => item.id));
   const payments = await db.invoicePayments.toArray();
