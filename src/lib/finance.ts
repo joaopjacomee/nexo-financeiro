@@ -106,9 +106,8 @@ export async function getPatrimony() {
     reserveId: item.reserveId,
     impactCents: item.date >= `${FINANCIAL_START_MONTH}-01` ? item.availableBalanceImpactCents ?? 0 : 0,
   })));
-  // Caixinhas are already included in bank cash, so they are shown as a
-  // breakdown but are not added a second time to net worth.
-  return { cash, receivable, cardCommitments, reserved, netWorth: cash + receivable - cardCommitments, freeCash };
+  // Caixinhas fazem parte do patrimônio líquido e são somadas separadamente.
+  return { cash, receivable, cardCommitments, reserved, netWorth: cash + reserved + receivable - cardCommitments, freeCash };
 }
 
 export async function getCategorySpend(month: string) {
