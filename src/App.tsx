@@ -41,16 +41,18 @@ const navGroups: { title: string; items: { key: PageKey; label: string; icon: ty
   { title: 'MOVIMENTAÇÕES', items: [{ key: 'transactions', label: 'Movimentações', icon: ArrowLeftRight }, { key: 'categories', label: 'Categorias', icon: Layers3 }] },
   { title: 'CONTAS E CARTÕES', items: [{ key: 'accounts', label: 'Contas bancárias', icon: Landmark }, { key: 'cards', label: 'Cartões', icon: CreditCard }, { key: 'invoices', label: 'Faturas', icon: Receipt }, { key: 'installments', label: 'Parcelamentos', icon: CalendarDays }] },
   { title: 'ORGANIZAÇÃO', items: [{ key: 'debtors', label: 'Devedores', icon: HandCoins }, { key: 'reserves', label: 'Caixinhas', icon: Goal }, { key: 'wishlist', label: 'Lista de desejo', icon: ShoppingBag }] },
-  { title: 'ANÁLISES', items: [{ key: 'reports', label: 'Relatórios', icon: FileBarChart }, { key: 'calendar', label: 'Calendário', icon: CalendarDays }, { key: 'forecast', label: 'Previsões', icon: Activity }, { key: 'patrimony', label: 'Patrimônio', icon: Wallet }] },
+  { title: 'ANÁLISES', items: [{ key: 'reports', label: 'Relatórios', icon: FileBarChart }, { key: 'forecast', label: 'Previsões', icon: Activity }, { key: 'patrimony', label: 'Patrimônio', icon: Wallet }] },
   { title: 'SISTEMA', items: [{ key: 'settings', label: 'Configurações', icon: Settings }] },
 ];
 const pageTitles: Record<PageKey, string> = {
   dashboard: 'Visão geral', months: 'Organização mensal', transactions: 'Movimentações', categories: 'Categorias',
   accounts: 'Contas bancárias', cards: 'Cartões', invoices: 'Faturas', installments: 'Parcelamentos', debtors: 'Devedores',
-  reserves: 'Minhas caixinhas', reports: 'Relatórios', calendar: 'Calendário financeiro',
+  reserves: 'Minhas caixinhas', reports: 'Relatórios',
   forecast: 'Previsão financeira', patrimony: 'Patrimônio', settings: 'Configurações', wishlist: 'Lista de desejo',
 };
 const COLORS = ['#6d28d9', '#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe', '#ede9fe', '#7c3aed', '#5b21b6'];
+const PRIVATE_SECTIONS_SESSION_KEY = 'nexo-private-sections-unlocked';
+const PRIVATE_SECTIONS_ACCESS_CODE = 'XOTA';
 
 interface Snapshot {
   categories: Category[]; accounts: Account[]; cards: Card[]; transactions: Transaction[]; purchases: Purchase[];
@@ -93,6 +95,10 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [ready, setReady] = useState(false);
   const [privacyNotice, setPrivacyNotice] = useState(false);
+  const [privateSectionsUnlocked, setPrivateSectionsUnlocked] = useState(() => {
+    try { return window.sessionStorage.getItem(PRIVATE_SECTIONS_SESSION_KEY) === 'true'; }
+    catch { return false; }
+  });
   const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null);
   const [query, setQuery] = useState('');
   const historyRef = useRef<{ before: HistorySnapshot; after: HistorySnapshot } | null>(null);
@@ -192,7 +198,24 @@ export default function App() {
       setToast({ message: error instanceof Error ? error.message : 'Não foi possível refazer a ação.', kind: 'error' });
     } finally { historyBusy.current = false; }
   };
-  const navigate = (key: PageKey) => { setPage(key); setMobileNav(false); };
+  const navigate = (key: PageKey) => {
+    if (!privateSectionsUnlocked && (key === 'debtors' || key === 'wishlist')) {
+      setPage('settings');
+      setMobileNav(false);
+      setToast({ message: 'Ative as áreas privadas nas Configurações para acessá-las.', kind: 'error' });
+      return;
+    }
+    setPage(key);
+    setMobileNav(false);
+  };
+  const updatePrivateSectionsAccess = (enabled: boolean) => {
+    try {
+      if (enabled) window.sessionStorage.setItem(PRIVATE_SECTIONS_SESSION_KEY, 'true');
+      else window.sessionStorage.removeItem(PRIVATE_SECTIONS_SESSION_KEY);
+    } catch { /* The in-memory access state still works for this open page. */ }
+    setPrivateSectionsUnlocked(enabled);
+    if (!enabled && (page === 'debtors' || page === 'wishlist')) setPage('dashboard');
+  };
   const common = { data: snapshot, month, setMonth, showValues, revision, refresh, act, query };
 
   if (!ready) return <div className="loading-screen"><div className="brand-mark">N</div><strong>Preparando seu espaço financeiro</strong><span>Inicializando o armazenamento local…</span></div>;
@@ -203,7 +226,7 @@ export default function App() {
         <div className="brand-lockup"><div className="brand-mark">N</div><div><strong>nexo</strong><span>FINANÇAS PESSOAIS</span></div><button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="Fechar menu"><X size={18}/></button></div>
         <div className="profile-card"><div className="profile-avatar">NP</div><div><strong>Meu espaço</strong><span>Dados neste dispositivo</span></div><ShieldCheck size={16} className="profile-shield"/></div>
         <nav className="side-nav">
-          {navGroups.map((group) => <section key={group.title} className="nav-group"><div className="nav-group-title">{group.title}</div>{group.items.map((item) => {
+          {navGroups.map((group) => <section key={group.title} className="nav-group"><div className="nav-group-title">{group.title}</div>{group.items.filter((item) => privateSectionsUnlocked || (item.key !== 'debtors' && item.key !== 'wishlist')).map((item) => {
             const Icon = item.icon;
             return <button key={item.key} className={`nav-item ${page === item.key ? 'active' : ''}`} onClick={() => navigate(item.key)}><Icon size={17}/><span>{item.label}</span>{item.key === 'dashboard' && <i className="nav-dot"/>}</button>;
           })}</section>)}
@@ -229,10 +252,9 @@ export default function App() {
           {page === 'reserves' && <ReservesPage {...common}/>}
           {page === 'wishlist' && <WishlistPage {...common}/>}
           {page === 'reports' && <ReportsPage {...common}/>}
-          {page === 'calendar' && <CalendarPage {...common}/>}
           {page === 'forecast' && <ForecastPage {...common}/>}
           {page === 'patrimony' && <PatrimonyPage {...common}/>}
-          {page === 'settings' && <SettingsPage {...common}/>}
+          {page === 'settings' && <SettingsPage {...common} privateSectionsUnlocked={privateSectionsUnlocked} onUnlockPrivateSections={updatePrivateSectionsAccess}/ >}
         </div>
         <footer className="app-footer"><span>© {new Date().getFullYear()} Nexo</span><span><ShieldCheck size={13}/> Seus dados financeiros não saem do navegador.</span></footer>
       </main>
@@ -772,19 +794,6 @@ function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProp
   return <><PageHeading eyebrow="INTELIGÊNCIA FINANCEIRA" title="Relatórios e análises" description="Entenda seus gastos, compare o planejado e identifique tendências." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><Button size="small" variant="secondary" onClick={() => downloadReportCsv(month, spend)}><Download size={14}/> CSV</Button><Button size="small" variant="secondary" onClick={() => downloadReportExcel(month, spend)}><FileText size={14}/> Excel</Button><Button size="small" variant="secondary" onClick={() => window.print()}>PDF / Imprimir</Button></div>}/><div className="stat-grid stat-grid-three"><StatCard label="Receitas" value={money(summary?.incomeCents ?? 0)} icon={TrendingUp} tone="green" hidden={!showValues}/><StatCard label="Despesas e parcelas" value={money((summary?.cashExpensesCents ?? 0) + (summary?.installmentsCents ?? 0))} icon={TrendingDown} tone="pink" hidden={!showValues}/><StatCard label="Saldo projetado" value={money(summary?.freeCents ?? 0)} icon={Wallet} hidden={!showValues}/></div><div className="dashboard-grid"><Panel><PanelHeader title="Despesas por categoria" subtitle={monthBR(month)}/>{chartData.length ? <ResponsiveContainer width="100%" height={320}><BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 22, bottom: 4, left: 24 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0eafa"/><XAxis type="number" tick={{ fontSize: 11, fill: '#8f879d' }} axisLine={false} tickLine={false}/><YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 11, fill: '#827b91' }} axisLine={false} tickLine={false}/><Tooltip formatter={(v) => money(Number(v) * 100)}/><Bar dataKey="gasto" fill="#8b5cf6" radius={[0, 6, 6, 0]}/></BarChart></ResponsiveContainer> : <EmptyState title="Sem dados suficientes" text="Registre despesas para preencher este relatório."/>}</Panel><Panel><PanelHeader title="Resumo por categoria" subtitle="Valores contabilizados no mês"/><div className="category-report-list">{spend.map((item, index) => <div className="category-report-row" key={item.category.id}><span className="category-dot" style={{ background: item.category.color }}/><span>{item.category.name}</span><strong>{showValues ? money(item.spentCents) : '••••'}</strong><small>{categoryTotalCents ? `${Math.round(item.spentCents / categoryTotalCents * 100)}%` : '—'}</small></div>)}</div></Panel></div><div className="info-note"><FileText size={17}/><span>Os valores de despesas por categoria somam registros à vista e parcelas de crédito no mês. Exporte este resumo em CSV ou Excel, ou use a impressão do navegador para salvar em PDF.</span></div></>;
 }
 
-function CalendarPage({ data, month, setMonth, revision }: CommonProps) {
-  const [installments, setInstallments] = useState<Awaited<ReturnType<typeof getInstallmentsForMonth>>>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  useEffect(() => { Promise.all([getInstallmentsForMonth(month), db.transactions.where('month').equals(month).toArray()]).then(([i, t]) => { setInstallments(i); setTransactions(t); }); }, [month, revision]);
-  const events = [
-    ...installments.map((item) => ({ date: item.dueDate, label: `Parcela ${item.number}/${item.count}`, detail: data.purchases.find((p) => p.id === item.purchaseId)?.description ?? 'Compra no cartão', amount: item.amountCents, kind: 'installment' })),
-    ...transactions.filter((tx) => tx.type === 'income').map((tx) => ({ date: tx.date, label: 'Receita', detail: tx.description, amount: tx.amountCents, kind: 'income' })),
-    ...transactions.filter((tx) => tx.type === 'expense' && isExpenseInAccountingPeriod(tx.date) && (tx.status === 'pending' || tx.status === 'receivable')).map((tx) => ({ date: tx.date, label: 'Conta pendente', detail: tx.description, amount: tx.amountCents, kind: tx.type })),
-    ...transactions.filter((tx) => tx.type === 'expense' && isExpenseInAccountingPeriod(tx.date) && (tx.status === 'paid' || tx.status === 'received')).map((tx) => ({ date: tx.date, label: 'Despesa paga', detail: tx.description, amount: tx.amountCents, kind: tx.type })),
-  ].sort((a, b) => a.date.localeCompare(b.date));
-  return <><PageHeading eyebrow="AGENDA FINANCEIRA" title="Calendário de compromissos" description="Visualize vencimentos de parcelas e movimentações registradas para o mês." action={<MonthSelector month={month} setMonth={setMonth}/>}/><Panel><PanelHeader title={monthBR(month)} subtitle={`${events.length} compromisso(s) registrado(s)`}/><div className="event-list">{events.map((event, index) => <div className="event-row" key={`${event.date}-${index}`}><div className="event-date"><strong>{event.date.slice(8, 10)}</strong><small>{new Intl.DateTimeFormat('pt-BR', { month: 'short' }).format(new Date(`${event.date}T12:00:00`))}</small></div><div className={`event-marker ${event.kind}`}/><div className="event-main"><strong>{event.label}</strong><span>{event.detail}</span></div><strong className={event.kind === 'income' ? 'positive' : 'negative'}>{money(event.amount)}</strong></div>)}{!events.length && <EmptyState icon={CalendarDays} title="Agenda livre por enquanto" text="Parcelas e movimentações com datas serão exibidas aqui."/>}</div></Panel><div className="info-note"><CircleHelp size={17}/><span>Este calendário apresenta parcelas e movimentações já cadastradas. Despesas recorrentes, lembretes automáticos e sincronização externa ainda não estão implementados.</span></div></>;
-}
-
 function ForecastPage({ data, month, setMonth, showValues, revision }: CommonProps) {
   const [rows, setRows] = useState<Array<{ month: string; income: number; expense: number; installments: number; reserves: number; monthlyFree: number; balance: number }>>([]);
   useEffect(() => {
@@ -812,8 +821,9 @@ function PatrimonyPage({ showValues, revision }: CommonProps) {
   return <><PageHeading eyebrow="VISÃO CONSOLIDADA" title="Patrimônio financeiro" description="Uma visão consolidada do que você possui, do que tem a receber e dos compromissos em aberto."/><div className="patrimony-hero"><span>Patrimônio líquido estimado</span><strong>{showValues ? money(data?.netWorth ?? 0) : '••••••'}</strong><small>Saldos bancários (incluindo caixinhas) + valores a receber − compromissos de cartão</small></div><div className="stat-grid stat-grid-three"><StatCard label="Saldos bancários" value={money(data?.cash ?? 0)} icon={Landmark} hidden={!showValues}/><StatCard label="Caixinhas" value={money(data?.reserved ?? 0)} icon={PiggyBank} tone="green" hidden={!showValues}/><StatCard label="Valores a receber" value={money(data?.receivable ?? 0)} icon={HandCoins} tone="lavender" hidden={!showValues}/><StatCard label="Compromissos de cartão" value={money(data?.cardCommitments ?? 0)} icon={CreditCard} tone="pink" hidden={!showValues}/><StatCard label="Dinheiro livre em contas" value={money(data?.freeCash ?? 0)} icon={Wallet} hidden={!showValues}/></div><Panel><PanelHeader title="Composição do patrimônio" subtitle="O valor das caixinhas é exibido como parte dos saldos em contas e não é somado novamente."/><div className="composition-list">{[{ label: 'Saldos em contas', amount: data?.cash ?? 0, color: '#7c3aed' }, { label: 'Caixinhas (incluídas nos saldos em contas)', amount: data?.reserved ?? 0, color: '#a78bfa' }, { label: 'Valores a receber', amount: data?.receivable ?? 0, color: '#c4b5fd' }, { label: 'Compromissos de cartão', amount: -(data?.cardCommitments ?? 0), color: '#ec4899' }].map((item) => <div className="composition-row" key={item.label}><span><i style={{ background: item.color }}/>{item.label}</span><strong className={item.amount < 0 ? 'negative' : ''}>{showValues ? money(item.amount) : '••••'}</strong></div>)}</div></Panel></>;
 }
 
-function SettingsPage({ act }: CommonProps) {
+function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }: CommonProps & { privateSectionsUnlocked: boolean; onUnlockPrivateSections: (enabled: boolean) => void }) {
   const [message, setMessage] = useState('');
+  const [accessCode, setAccessCode] = useState('');
   const [password, setPassword] = useState('');
   const exportFile = async (encrypted: boolean) => {
     try {
@@ -834,7 +844,23 @@ function SettingsPage({ act }: CommonProps) {
       if (ok) setMessage('Backup restaurado sem duplicar registros já existentes.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Arquivo inválido ou senha incorreta.'); }
   };
-  return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/><div className="settings-grid"><Panel><div className="settings-icon purple"><Download size={20}/></div><h3>Backup dos dados</h3><p>Exporte suas informações em JSON para guardar uma cópia completa das contas, movimentações, cartões, parcelas, devedores, reservas e CDI.</p><div className="settings-actions"><Button onClick={() => void exportFile(false)}><Download size={15}/> Exportar JSON</Button></div></Panel><Panel><div className="settings-icon green"><ShieldCheck size={20}/></div><h3>Backup criptografado</h3><p>Use uma senha para proteger o arquivo com AES-GCM e derivação de chave PBKDF2. A senha não é salva pelo Nexo.</p><Field label="Senha (mínimo 8 caracteres)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Defina uma senha forte"/></Field><div className="settings-actions"><Button variant="secondary" onClick={() => void exportFile(true)} disabled={password.length < 8}>Exportar criptografado</Button></div></Panel><Panel><div className="settings-icon lavender"><Upload size={20}/></div><h3>Restaurar backup</h3><p>Importe um JSON exportado pelo Nexo. A restauração mescla registros e evita duplicatas por identificador.</p><Field label="Senha do backup criptografado (se aplicável)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)}/></Field><label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(e) => void importFile(e.target.files?.[0])}/></label></Panel><Panel><div className="settings-icon pink"><Smartphone size={20}/></div><h3>Privacidade e armazenamento</h3><p>Seus dados ficam no IndexedDB deste navegador e não são enviados para um servidor. O armazenamento local não é automaticamente criptografado.</p><ul className="settings-list"><li>Não armazene senhas bancárias ou números completos de cartões.</li><li>Limpar os dados do navegador pode apagar suas informações.</li><li>Faça backups periódicos e guarde uma cópia fora do dispositivo.</li><li>O modo offline depende do primeiro carregamento completo da aplicação.</li></ul></Panel></div><Panel><div className="settings-icon pink"><Trash2 size={20}/></div><h3>Apagar dados de teste</h3><p>Remove os registros deste navegador e recria apenas os cadastros iniciais vazios. Faça um backup antes, caso queira conservar alguma informação.</p><div className="settings-actions"><Button variant="danger" onClick={() => { void act(() => clearTestData(), 'Os dados de teste foram apagados e os cadastros vazios foram recriados.'); }}>Apagar todos os dados</Button></div></Panel>{message && <div className="info-note"><Check size={17}/><span>{message}</span><button className="icon-button mini" onClick={() => setMessage('')}><X size={14}/></button></div>}<Panel className="about-panel"><PanelHeader title="Sobre o Nexo"/><div className="about-grid"><div><span>Versão</span><strong>1.0.0</strong></div><div><span>Banco de dados</span><strong>IndexedDB · Dexie.js</strong></div><div><span>Hospedagem</span><strong>GitHub Pages</strong></div><div><span>Arquitetura</span><strong>100% navegador</strong></div></div></Panel></>;
+  const submitAccessCode = () => {
+    if (accessCode !== PRIVATE_SECTIONS_ACCESS_CODE) {
+      setMessage('Código incorreto. Confira e tente novamente.');
+      setAccessCode('');
+      return;
+    }
+    onUnlockPrivateSections(true);
+    setAccessCode('');
+    setMessage('Áreas privadas desbloqueadas nesta aba do navegador.');
+  };
+  return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/>
+    <Panel><div className="settings-icon lavender"><ShieldCheck size={20}/></div><h3>Áreas privadas</h3><p>Devedores e Lista de desejo ficam ocultos até que você informe seu código de acesso. O desbloqueio vale somente para esta aba do navegador.</p>
+      {privateSectionsUnlocked
+        ? <div className="settings-actions"><span className="status-pill status-received">Áreas privadas ativadas nesta aba</span><Button variant="secondary" onClick={() => { onUnlockPrivateSections(false); setMessage('Áreas privadas bloqueadas novamente.'); }}>Bloquear áreas privadas</Button></div>
+        : <div className="settings-actions"><Field label="Código de acesso"><input type="password" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }} autoComplete="off" placeholder="Digite o código de acesso" maxLength={32}/></Field><Button onClick={submitAccessCode} disabled={!accessCode.trim()}>Ativar áreas privadas</Button></div>}
+    </Panel>
+    <div className="settings-grid"><Panel><div className="settings-icon purple"><Download size={20}/></div><h3>Backup dos dados</h3><p>Exporte suas informações em JSON para guardar uma cópia completa das contas, movimentações, cartões, parcelas, devedores, reservas e CDI.</p><div className="settings-actions"><Button onClick={() => void exportFile(false)}><Download size={15}/> Exportar JSON</Button></div></Panel><Panel><div className="settings-icon green"><ShieldCheck size={20}/></div><h3>Backup criptografado</h3><p>Use uma senha para proteger o arquivo com AES-GCM e derivação de chave PBKDF2. A senha não é salva pelo Nexo.</p><Field label="Senha (mínimo 8 caracteres)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Defina uma senha forte"/></Field><div className="settings-actions"><Button variant="secondary" onClick={() => void exportFile(true)} disabled={password.length < 8}>Exportar criptografado</Button></div></Panel><Panel><div className="settings-icon lavender"><Upload size={20}/></div><h3>Restaurar backup</h3><p>Importe um JSON exportado pelo Nexo. A restauração mescla registros e evita duplicatas por identificador.</p><Field label="Senha do backup criptografado (se aplicável)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)}/></Field><label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(e) => void importFile(e.target.files?.[0])}/></label></Panel><Panel><div className="settings-icon pink"><Smartphone size={20}/></div><h3>Privacidade e armazenamento</h3><p>Seus dados ficam no IndexedDB deste navegador e não são enviados para um servidor. O armazenamento local não é automaticamente criptografado.</p><ul className="settings-list"><li>Não armazene senhas bancárias ou números completos de cartões.</li><li>Limpar os dados do navegador pode apagar suas informações.</li><li>Faça backups periódicos e guarde uma cópia fora do dispositivo.</li><li>O modo offline depende do primeiro carregamento completo da aplicação.</li></ul></Panel></div><Panel><div className="settings-icon pink"><Trash2 size={20}/></div><h3>Apagar dados de teste</h3><p>Remove os registros deste navegador e recria apenas os cadastros iniciais vazios. Faça um backup antes, caso queira conservar alguma informação.</p><div className="settings-actions"><Button variant="danger" onClick={() => { void act(() => clearTestData(), 'Os dados de teste foram apagados e os cadastros vazios foram recriados.'); }}>Apagar todos os dados</Button></div></Panel>{message && <div className="info-note"><Check size={17}/><span>{message}</span><button className="icon-button mini" onClick={() => setMessage('')}><X size={14}/></button></div>}<Panel className="about-panel"><PanelHeader title="Sobre o Nexo"/><div className="about-grid"><div><span>Versão</span><strong>1.0.0</strong></div><div><span>Banco de dados</span><strong>IndexedDB · Dexie.js</strong></div><div><span>Hospedagem</span><strong>GitHub Pages</strong></div><div><span>Arquitetura</span><strong>100% navegador</strong></div></div></Panel></>;
 }
 function downloadFile(content: string, filename: string, mime: string) { const blob = new Blob([content], { type: mime }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
 
