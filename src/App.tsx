@@ -508,7 +508,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const filteredInstallments = monthInstallments.filter((item) => {
     const purchase = data.purchases.find((entry) => entry.id === item.purchaseId);
     const text = `${purchase?.description ?? ''} ${purchase?.notes ?? ''}`.toLowerCase();
-    return (!typeFilters.length || typeFilters.includes('expense')) &&
+    return !purchase?.isFamilyDebt && (!typeFilters.length || typeFilters.includes('expense')) &&
       (!categoryFilters.length || categoryFilters.includes(purchase?.categoryId ?? 'uncategorized')) &&
       (!statusFilters.length || statusFilters.includes(purchase?.expenseClass ?? 'Essencial')) &&
       text.includes((search || query).toLowerCase());
@@ -816,12 +816,15 @@ function DebtorsPage({ data, showValues, revision, act }: CommonProps) {
   const [modal, setModal] = useState<'new' | string | null>(null);
   const [expandedPerson, setExpandedPerson] = useState<string | null>(null);
   useEffect(() => { Promise.all([getDebtorMetrics(), db.debtorPayments.toArray()]).then(([m, p]) => { setMetrics(m); setPayments(p); }); }, [revision]);
-  const people = Array.from(metrics.reduce((groups, metric) => {
-    const key = metric.debtor.person.trim().toLocaleLowerCase('pt-BR');
+  const normalizePerson = (value: string) => value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+  const peopleByKey = metrics.reduce((groups, metric) => {
+    const key = normalizePerson(metric.debtor.person);
     const group = groups.get(key) ?? { key, person: metric.debtor.person.trim(), debts: [] as typeof metrics, originalCents: 0, receivedCents: 0, remainingCents: 0 };
     group.debts.push(metric); group.originalCents += metric.debtor.originalCents; group.receivedCents += metric.receivedCents; group.remainingCents += metric.remainingCents;
     groups.set(key, group); return groups;
-  }, new Map<string, { key: string; person: string; debts: typeof metrics; originalCents: number; receivedCents: number; remainingCents: number }>()).values());
+  }, new Map<string, { key: string; person: string; debts: typeof metrics; originalCents: number; receivedCents: number; remainingCents: number }>());
+  if (!peopleByKey.has('familia')) peopleByKey.set('familia', { key: 'familia', person: 'Família', debts: [], originalCents: 0, receivedCents: 0, remainingCents: 0 });
+  const people = Array.from(peopleByKey.values()).sort((a, b) => a.person.localeCompare(b.person, 'pt-BR'));
   const outstanding = people.reduce((sum, person) => sum + person.remainingCents, 0);
   const received = people.reduce((sum, person) => sum + person.receivedCents, 0);
   return <>
@@ -829,32 +832,65 @@ function DebtorsPage({ data, showValues, revision, act }: CommonProps) {
     <div className="stat-grid stat-grid-three"><StatCard label="Total a receber" value={money(outstanding)} icon={HandCoins} hidden={!showValues}/><StatCard label="Já recebido" value={money(received)} icon={ArrowDownLeft} tone="green" hidden={!showValues}/><StatCard label="Pessoas com saldo" value={String(people.filter((person) => person.remainingCents > 0).length)} icon={Activity}/></div>
     <Panel><PanelHeader title="Pessoas e dívidas" subtitle="Adicione novas dívidas à mesma pessoa; os valores são somados automaticamente."/><div className="table-scroll"><table><thead><tr><th>PESSOA</th><th>QUANTIDADE DE DÍVIDAS</th><th>TOTAL ORIGINAL</th><th>RECEBIDO</th><th>RESTANTE</th><th></th></tr></thead><tbody>{people.map((person) => <Fragment key={person.key}>
       <tr><td><strong>{person.person}</strong></td><td>{person.debts.length} {person.debts.length === 1 ? 'dívida' : 'dívidas'}</td><td>{showValues ? money(person.originalCents) : '••••'}</td><td className="positive">{showValues ? money(person.receivedCents) : '••••'}</td><td><strong>{showValues ? money(person.remainingCents) : '••••'}</strong></td><td><Button size="small" variant="secondary" onClick={() => setExpandedPerson(expandedPerson === person.key ? null : person.key)}>{expandedPerson === person.key ? 'Ocultar' : 'Detalhes'}</Button></td></tr>
-      {expandedPerson === person.key && <tr><td colSpan={6}><div className="debtor-details-list">{person.debts.map(({ debtor, receivedCents, remainingCents, status }) => <div className="debtor-detail" key={debtor.id}>
+      {expandedPerson === person.key && <tr><td colSpan={6}><div className="debtor-details-list">{person.debts.length ? person.debts.map(({ debtor, receivedCents, remainingCents, status }) => <div className="debtor-detail" key={debtor.id}>
         <div className="debtor-detail-main"><strong>{debtor.description}</strong><span>{dateBR(debtor.originDate)}{debtor.dueDate ? ` · Previsão: ${dateBR(debtor.dueDate)}` : ''}</span>{debtor.originalPayment && <small>Forma original: {debtor.originalPayment}</small>}{debtor.notes && <small>{debtor.notes}</small>}</div>
         <div className="debtor-detail-values"><span>Original: {showValues ? money(debtor.originalCents) : '••••'}</span><span>Recebido: {showValues ? money(receivedCents) : '••••'}</span><strong>Restante: {showValues ? money(remainingCents) : '••••'}</strong></div>
         <div className="debtor-detail-actions"><span className={`status-pill ${status === 'Quitado' ? 'status-received' : status === 'Atrasado' ? 'status-cancelled' : 'status-pending'}`}>{status}</span>{remainingCents > 0 && <Button size="small" onClick={() => setModal(debtor.id)}>Receber</Button>}<Button size="small" variant="danger" onClick={() => { void act(() => deleteDebtor(debtor.id), 'Dívida removida.'); }}><Trash2 size={14}/> Excluir</Button></div>
         {payments.filter((payment) => payment.debtorId === debtor.id).map((payment) => <div className="debtor-payment-row" key={payment.id}><span>Pagamento em {dateBR(payment.date)} · {showValues ? money(payment.amountCents) : '••••'}</span><button className="icon-button mini danger-icon" title="Excluir recebimento" onClick={() => { void act(() => deleteDebtorPayment(payment.id), 'Recebimento excluído.'); }}><Trash2 size={14}/></button></div>)}
-      </div>)}</div></td></tr>}
+      </div>) : <div className="form-footnote">Nenhuma dívida cadastrada para esta pessoa ainda.</div>}</div></td></tr>}
     </Fragment>)}</tbody></table>{!people.length && <EmptyState icon={HandCoins} title="Nenhum valor a receber" text="Cadastre uma dívida para começar o acompanhamento." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Adicionar dívida</Button>}/>}</div></Panel>
     {modal === 'new' && <DebtorModal data={data} onClose={() => setModal(null)} act={act}/>}
     {modal && modal !== 'new' && <ReceiveDebtorModal debtorId={modal} data={data} onClose={() => setModal(null)} act={act}/>}
   </>;
 }
 function DebtorModal({ data, onClose, act }: { data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
-  const [form, setForm] = useState({ person: '', description: '', amount: '', originDate: today(), dueDate: '', categoryId: '', originAccountId: data.accounts[0]?.id ?? '', originalPayment: 'Pix', notes: '' });
-  const submit = () => act(() => createDebtor({ person: form.person, description: form.description, originalCents: toCents(form.amount), originDate: form.originDate, dueDate: form.dueDate || undefined, categoryId: form.categoryId || undefined, originAccountId: form.originAccountId, originalPayment: form.originalPayment || undefined, notes: form.notes }), 'Dívida registrada. O valor saiu da conta selecionada e foi lançado como despesa.').then((ok) => { if (ok) onClose(); });
+  const [form, setForm] = useState({ person: 'Família', description: '', amount: '', originDate: today(), dueDate: '', categoryId: '', originAccountId: data.accounts[0]?.id ?? '', notes: '' });
+  const [mode, setMode] = useState<Transaction['paymentMode']>('pix');
+  const [cardId, setCardId] = useState(data.cards[0]?.id ?? '');
+  const [installmentsCount, setInstallmentsCount] = useState('1');
+  const [firstDueMonth, setFirstDueMonth] = useState(suggestFirstInvoiceMonth(today(), data.cards[0]));
+  const familyPerson = form.person.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR') === 'familia';
+  const plansReserve = data.reserves.find((reserve) => reserve.name.trim().toLocaleLowerCase('pt-BR') === 'planos' && !reserve.closed);
+  const knownPeople = Array.from(new Set(['Família', ...data.debtors.map((item) => item.person.trim()).filter(Boolean)]));
+  const submit = () => {
+    const successMessage = mode === 'card-credit' && familyPerson
+      ? 'Dívida da Família registrada. O limite do cartão foi atualizado sem lançar uma despesa própria.'
+      : mode === 'card-credit'
+        ? 'Dívida registrada e compra adicionada ao cartão.'
+        : 'Dívida registrada e saída lançada conforme a forma de pagamento.';
+    return act(() => createDebtor({
+      person: form.person, description: form.description, originalCents: toCents(form.amount),
+      originDate: form.originDate, dueDate: form.dueDate || undefined, categoryId: form.categoryId || undefined,
+      originAccountId: ['pix', 'cash', 'card-debit'].includes(mode) ? form.originAccountId : undefined,
+      notes: form.notes, paymentMode: mode, cardId: mode === 'card-credit' ? cardId : undefined,
+      installmentsCount: mode === 'card-credit' ? Number(installmentsCount) : undefined,
+      firstDueMonth: mode === 'card-credit' ? firstDueMonth : undefined,
+      reserveId: mode === 'reserve-plans' ? plansReserve?.id : undefined,
+    }), successMessage).then((ok) => { if (ok) onClose(); });
+  };
+  const canSave = Boolean(form.person.trim() && form.description.trim() && form.amount.trim()
+    && (mode !== 'card-credit' || (cardId && firstDueMonth))
+    && (!['pix', 'cash', 'card-debit'].includes(mode) || form.originAccountId)
+    && (mode !== 'reserve-plans' || plansReserve));
   return <Modal title="Adicionar dívida" onClose={onClose}><div className="form-grid">
-    <Field label="Nome da pessoa"><input value={form.person} onChange={(e) => setForm({ ...form, person: e.target.value })}/></Field>
+    <Field label="Nome da pessoa"><input list="nexo-debtor-people" value={form.person} onChange={(e) => setForm({ ...form, person: e.target.value })}/><datalist id="nexo-debtor-people">{knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}/>)}</datalist></Field>
     <Field label="Valor devido (R$)"><MoneyInput value={form.amount} onChange={(amount) => setForm({ ...form, amount })}/></Field>
     <Field label="Descrição"><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field>
-    <Field label="Data da saída"><input type="date" value={form.originDate} onChange={(e) => setForm({ ...form, originDate: e.target.value })}/></Field>
-    <Field label="Conta de onde saiu o dinheiro"><select value={form.originAccountId} onChange={(e) => setForm({ ...form, originAccountId: e.target.value })}>{data.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
+    <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data da saída'}><input type="date" value={form.originDate} onChange={(e) => { setForm({ ...form, originDate: e.target.value }); setFirstDueMonth(suggestFirstInvoiceMonth(e.target.value, data.cards.find((card) => card.id === cardId))); }}/></Field>
     <Field label="Previsão de pagamento"><input type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })}/></Field>
     <Field label="Categoria relacionada"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
-    <Field label="Forma de envio"><input value={form.originalPayment} onChange={(e) => setForm({ ...form, originalPayment: e.target.value })} placeholder="Ex.: Pix, transferência…"/></Field>
+    <Field label="Forma de pagamento"><select value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option><option value="card-credit">Cartão de crédito</option><option value="reserve-plans">Reserva de planos</option><option value="other">Outro</option></select></Field>
+    {mode === 'card-credit' && <>
+      <Field label="Cartão de crédito"><select value={cardId} onChange={(e) => { setCardId(e.target.value); setFirstDueMonth(suggestFirstInvoiceMonth(form.originDate, data.cards.find((card) => card.id === e.target.value))); }}><option value="">Selecione o cartão</option>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
+      <Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={installmentsCount} onChange={(e) => setInstallmentsCount(e.target.value)}/></Field>
+      <Field label="Mês da primeira fatura"><input type="month" value={firstDueMonth} onChange={(e) => setFirstDueMonth(e.target.value)}/></Field>
+      <div className="form-footnote"><CreditCard size={15}/> A compra será registrada no cartão e consumirá o limite. Para Família, não será lançada como despesa própria nem reduzirá o patrimônio.</div>
+    </>}
+    {['pix', 'cash', 'card-debit'].includes(mode) && <Field label={mode === 'cash' ? 'Carteira de dinheiro' : 'Conta utilizada'}><select value={form.originAccountId} onChange={(e) => setForm({ ...form, originAccountId: e.target.value })}><option value="">Selecione a conta</option>{data.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>}
+    {mode === 'reserve-plans' && <div className="form-footnote"><PiggyBank size={15}/> O valor será retirado diretamente da caixinha Planos. O saldo disponível será validado ao salvar.</div>}
     <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
-    <div className="form-footnote">O empréstimo será lançado como despesa paga e reduzirá o saldo da conta selecionada.</div>
-    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!data.accounts.length}>Salvar dívida</Button></div>
+    {mode !== 'card-credit' && <div className="form-footnote">O valor será lançado como saída pela forma de pagamento selecionada.</div>}
+    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!canSave}>{mode === 'card-credit' ? 'Registrar no cartão' : 'Salvar dívida'}</Button></div>
   </div></Modal>;
 }
 function ReceiveDebtorModal({ debtorId, data, onClose, act }: { debtorId: string; data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
@@ -1084,6 +1120,7 @@ function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProp
         const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
         for (const installment of installments) {
           const purchase = purchaseById.get(installment.purchaseId);
+          if (purchase?.isFamilyDebt) continue;
           const classification = purchase?.expenseClass ?? 'Essencial';
           totals[classification] += installment.amountCents;
         }

@@ -49,11 +49,13 @@ export async function getCardMetrics(): Promise<CardMetrics[]> {
 }
 
 export async function getMonthSummary(month: string): Promise<MonthSummary> {
-  const [transactions, installments, reserveMovements] = await Promise.all([
+  const [transactions, installments, reserveMovements, purchases] = await Promise.all([
     db.transactions.where('month').equals(month).toArray(),
     db.installments.where('dueMonth').equals(month).toArray(),
     db.reserveMovements.where('date').between(`${month}-01`, `${month}-31`, true, true).toArray(),
+    db.purchases.toArray(),
   ]);
+  const familyPurchaseIds = new Set(purchases.filter((purchase) => purchase.isFamilyDebt).map((purchase) => purchase.id));
   const valid = transactions.filter((tx) => tx.status !== 'cancelled' && isTransactionVisibleByDate(tx.date, today()));
   const incomes = valid.filter((tx) => tx.type === 'income');
   const expenses = valid.filter((tx) => tx.type === 'expense' && isExpenseInAccountingPeriod(tx.date));
@@ -61,7 +63,9 @@ export async function getMonthSummary(month: string): Promise<MonthSummary> {
   const pendingIncomeCents = incomes.filter((tx) => tx.status === 'pending' || tx.status === 'receivable').reduce((sum, tx) => sum + tx.amountCents, 0);
   const paidCashExpensesCents = expenses.filter((tx) => tx.status === 'paid').reduce((sum, tx) => sum + tx.amountCents, 0);
   const pendingExpensesCents = expenses.filter((tx) => tx.status === 'pending' || tx.status === 'receivable').reduce((sum, tx) => sum + tx.amountCents, 0);
-  const installmentTotal = isMonthInAccountingPeriod(month) ? installments.reduce((sum, item) => sum + item.amountCents, 0) : 0;
+  const installmentTotal = isMonthInAccountingPeriod(month)
+    ? installments.filter((item) => !familyPurchaseIds.has(item.purchaseId)).reduce((sum, item) => sum + item.amountCents, 0)
+    : 0;
   const countedReserveMovements = isMonthInAccountingPeriod(month) ? reserveMovements : [];
   const reserveDepositsCents = countedReserveMovements.reduce((sum, item) => sum + Math.max(0, item.availableBalanceImpactCents ?? 0), 0);
   const reserveWithdrawalsCents = countedReserveMovements.reduce((sum, item) => sum + Math.max(0, -(item.availableBalanceImpactCents ?? 0)), 0);
@@ -93,13 +97,18 @@ export async function getDebtorMetrics() {
 }
 
 export async function getPatrimony() {
-  const [balances, cardMetrics, debtorMetrics, reserves, reserveMovements, transactions] = await Promise.all([
+  const [balances, cardMetrics, debtorMetrics, reserves, reserveMovements, transactions, purchases, installments] = await Promise.all([
     getAccountBalances(), getCardMetrics(), getDebtorMetrics(), getReserveBalances(), db.reserveMovements.toArray(), db.transactions.toArray(),
+    db.purchases.toArray(), db.installments.toArray(),
   ]);
   const reservePlanExpenses = transactions.filter((tx) => tx.paymentMode === 'reserve-plans' && tx.type === 'expense' && tx.status === 'paid' && isExpenseInAccountingPeriod(tx.date)).reduce((sum, tx) => sum + tx.amountCents, 0);
   const cash = balances.reduce((sum, item) => sum + item.balanceCents, 0) - reservePlanExpenses;
   const receivable = debtorMetrics.reduce((sum, item) => sum + item.remainingCents, 0);
-  const cardCommitments = cardMetrics.reduce((sum, item) => sum + item.usedCents, 0);
+  const familyPurchaseIds = new Set(purchases.filter((purchase) => purchase.isFamilyDebt).map((purchase) => purchase.id));
+  const familyCardCommitments = installments
+    .filter((item) => familyPurchaseIds.has(item.purchaseId) && isMonthInAccountingPeriod(item.dueMonth))
+    .reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+  const cardCommitments = Math.max(0, cardMetrics.reduce((sum, item) => sum + item.usedCents, 0) - familyCardCommitments);
   const reserved = reserves.reduce((sum, item) => sum + item.balanceCents, 0);
   // Initial caixinha amounts (before Dec/2026) are part of the opening balance,
   // not new deposits that should reduce free cash again.
@@ -117,7 +126,7 @@ export async function getCategorySpend(month: string) {
   ]);
   return categories.map((category) => {
     const direct = transactions.filter((tx) => tx.type === 'expense' && tx.status !== 'cancelled' && isTransactionVisibleByDate(tx.date, today()) && isExpenseInAccountingPeriod(tx.date) && tx.categoryId === category.id).reduce((sum, tx) => sum + tx.amountCents, 0);
-    const purchaseIds = new Set(purchases.filter((purchase) => purchase.categoryId === category.id).map((purchase) => purchase.id));
+    const purchaseIds = new Set(purchases.filter((purchase) => purchase.categoryId === category.id && !purchase.isFamilyDebt).map((purchase) => purchase.id));
     const credit = isMonthInAccountingPeriod(month) ? installments.filter((item) => purchaseIds.has(item.purchaseId)).reduce((sum, item) => sum + item.amountCents, 0) : 0;
     return { category, spentCents: direct + credit };
   }).filter((item) => item.spentCents > 0);

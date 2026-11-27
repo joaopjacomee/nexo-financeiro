@@ -838,6 +838,9 @@ export async function updateCardPurchase(input: {
     firstDueMonth: input.firstDueMonth,
     installmentsCount: input.installmentsCount,
     notes: input.notes?.trim() || undefined,
+    isFamilyDebt: purchase.isDebtorCredit
+      ? sharedLinks.some((link) => normalizePerson(link.person).normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'familia')
+      : purchase.isFamilyDebt,
   };
   const installmentRows = amounts.map((amountCents, index) => {
     const previous = currentInstallments[index];
@@ -915,33 +918,119 @@ export async function createTransfer(input: { fromAccountId: string; toAccountId
   await db.transfers.add({ id: makeId(), ...input });
 }
 
-export async function createDebtor(input: Omit<Debtor, 'id' | 'createdAt' | 'linkedTransactionId'>) {
-  if (!input.person.trim() || !input.description.trim()) throw new Error('Informe pessoa e descrição.');
-  if (!input.originAccountId || !(await db.accounts.get(input.originAccountId))) throw new Error('Selecione a conta de onde o dinheiro saiu.');
+export async function createDebtor(input: Omit<Debtor, 'id' | 'createdAt' | 'linkedTransactionId' | 'sharedPurchaseId'> & {
+  paymentMode: Transaction['paymentMode'];
+  cardId?: string;
+  installmentsCount?: number;
+  firstDueMonth?: string;
+  reserveId?: string;
+}) {
+  const person = input.person.trim();
+  const description = input.description.trim();
+  if (!person || !description) throw new Error('Informe pessoa e descrição.');
   if (!Number.isSafeInteger(input.originalCents) || input.originalCents <= 0) throw new Error('Valor da dívida inválido.');
-  const id = makeId();
-  const linkedTransactionId = makeId();
-  const loanExpense: Transaction = {
-    id: linkedTransactionId,
-    type: 'expense',
-    description: `Empréstimo para ${input.person.trim()}: ${input.description.trim()}`,
-    amountCents: input.originalCents,
-    date: input.originDate,
-    month: input.originDate.slice(0, 7),
-    categoryId: input.categoryId,
-    expenseClass: 'Essencial',
-    status: 'paid',
-    paymentMode: 'pix',
-    accountId: input.originAccountId,
-    notes: input.notes,
-    createdAt: new Date().toISOString(),
+
+  const paymentMode = input.paymentMode;
+  const paymentLabels: Record<Transaction['paymentMode'], string> = {
+    pix: 'Pix', cash: 'Dinheiro', 'card-debit': 'Cartão de débito',
+    'card-credit': 'Cartão de crédito', other: 'Outro', 'reserve-plans': 'Reserva de planos',
   };
-  const debtor: Debtor = { ...input, id, linkedTransactionId, createdAt: new Date().toISOString() };
-  await db.transaction('rw', db.debtors, db.transactions, db.months, async () => {
-    await db.debtors.add(debtor);
-    await db.transactions.add(loanExpense);
-    await db.months.put({ id: loanExpense.month, month: loanExpense.month, createdAt: new Date().toISOString() });
-  });
+  const usesAccount = ['pix', 'cash', 'card-debit'].includes(paymentMode);
+  if (usesAccount && (!input.originAccountId || !(await db.accounts.get(input.originAccountId)))) {
+    throw new Error('Selecione a conta utilizada.');
+  }
+  if (paymentMode === 'reserve-plans' && input.reserveId && !(await db.reserves.get(input.reserveId))) {
+    throw new Error('Caixinha não encontrada.');
+  }
+
+  const isCredit = paymentMode === 'card-credit';
+  const isFamily = person.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR') === 'familia';
+  const id = makeId();
+  const createdAt = new Date().toISOString();
+  let linkedTransactionId: string | undefined;
+  let sharedPurchaseId: string | undefined;
+  let purchaseValue: import('../types').Purchase | undefined;
+  let installmentRows: Array<{
+    id: string; purchaseId: string; cardId: string; number: number; count: number; amountCents: number; paidCents: number; dueMonth: string; dueDate: string;
+  }> = [];
+  let plansReserve: Reserve | undefined;
+
+  if (isCredit) {
+    const card = input.cardId ? await db.cards.get(input.cardId) : undefined;
+    if (!card) throw new Error('Selecione um cartão de crédito válido.');
+    const count = input.installmentsCount ?? 1;
+    if (!Number.isInteger(count) || count < 1 || count > 240) throw new Error('Quantidade de parcelas inválida (1 a 240).');
+    const firstDueMonth = input.firstDueMonth ?? monthOffset(input.originDate.slice(0, 7), 1);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(firstDueMonth)) throw new Error('Informe o mês da primeira fatura.');
+    const currentInstallments = await db.installments.where('cardId').equals(card.id).toArray();
+    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+    if (card.limitCents > 0 && input.originalCents + currentCommitment > card.limitCents) {
+      throw new Error('A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
+    }
+    sharedPurchaseId = makeId();
+    purchaseValue = {
+      id: sharedPurchaseId, description, totalCents: input.originalCents, cardId: card.id,
+      categoryId: input.categoryId, purchaseDate: input.originDate, firstDueMonth, installmentsCount: count,
+      createdAt, notes: input.notes, isDebtorCredit: true, isFamilyDebt: isFamily,
+    };
+    const amounts = splitInstallmentCents(input.originalCents, count);
+    installmentRows = amounts.map((amountCents, index) => {
+      const dueMonth = monthOffset(firstDueMonth, index);
+      const day = Math.min(card.dueDay, daysInMonth(dueMonth));
+      return {
+        id: makeId(), purchaseId: sharedPurchaseId!, cardId: card.id, number: index + 1, count,
+        amountCents, paidCents: 0, dueMonth, dueDate: dueMonth + '-' + String(day).padStart(2, '0'),
+      };
+    });
+  } else {
+    if (paymentMode === 'reserve-plans') {
+      plansReserve = input.reserveId
+        ? await db.reserves.get(input.reserveId)
+        : await db.reserves.filter((item) => item.name.trim().toLocaleLowerCase('pt-BR') === 'planos' && !item.closed).first();
+      if (!plansReserve || plansReserve.closed) throw new Error('Crie ou reabra a caixinha Planos antes de usar esta forma de pagamento.');
+      const movements = await db.reserveMovements.where('reserveId').equals(plansReserve.id).toArray();
+      const balance = movements.reduce((sum, item) => sum + (item.type === 'withdrawal' ? -item.amountCents : item.amountCents), 0);
+      if (input.originalCents > balance) throw new Error('O saldo da caixinha Planos é insuficiente.');
+    }
+    linkedTransactionId = makeId();
+  }
+
+  const debtor: Debtor = {
+    person, description, originalCents: input.originalCents, originDate: input.originDate, dueDate: input.dueDate,
+    categoryId: input.categoryId, originalPayment: paymentLabels[paymentMode],
+    originAccountId: usesAccount ? input.originAccountId : undefined,
+    notes: input.notes, linkedTransactionId, sharedPurchaseId, id, createdAt,
+  };
+  const loanExpense: Transaction | undefined = linkedTransactionId ? {
+    id: linkedTransactionId, type: 'expense',
+    description: `Empréstimo para ${person}: ${description}`,
+    amountCents: input.originalCents, date: input.originDate, month: input.originDate.slice(0, 7),
+    categoryId: input.categoryId, expenseClass: 'Essencial', status: 'paid', paymentMode,
+    accountId: usesAccount ? input.originAccountId : undefined, reserveId: plansReserve?.id,
+    notes: input.notes, createdAt,
+  } : undefined;
+
+  await db.transaction(
+    'rw',
+    [db.debtors, db.transactions, db.months, db.purchases, db.installments, db.reserveMovements],
+    async () => {
+      await db.debtors.add(debtor);
+      if (purchaseValue) {
+        await db.purchases.add(purchaseValue);
+        await db.installments.bulkAdd(installmentRows);
+        await db.months.bulkPut([...new Set(installmentRows.map((item) => item.dueMonth))].map((month) => ({ id: month, month, createdAt })));
+      }
+      if (loanExpense) {
+        await db.transactions.add(loanExpense);
+        await db.months.put({ id: loanExpense.month, month: loanExpense.month, createdAt });
+        if (plansReserve) await db.reserveMovements.add({
+          id: makeId(), reserveId: plansReserve.id, type: 'withdrawal', amountCents: input.originalCents,
+          date: input.originDate, notes: 'Empréstimo para ' + person + ': ' + description,
+          linkedTransactionId: loanExpense.id, availableBalanceImpactCents: -input.originalCents,
+        });
+      }
+    },
+  );
 }
 
 export async function receiveDebtorPayment(input: { debtorId: string; accountId: string; amountCents: number; date: string; notes?: string }) {
@@ -1270,15 +1359,17 @@ function fromBase64(data: string) { return Uint8Array.from(atob(data), (char) =>
 
 
 // Exclusions keep related records consistent and remove dependent records only.
-export async function deleteDebtor(debtorId: string) {
+export async function deleteDebtor(debtorId: string, removeLinkedPurchase = true) {
   const debtor = await db.debtors.get(debtorId);
   if (!debtor) return;
   const payments = await db.debtorPayments.where('debtorId').equals(debtorId).toArray();
+  const linkedPurchase = debtor.sharedPurchaseId ? await db.purchases.get(debtor.sharedPurchaseId) : undefined;
   await db.transaction('rw', db.debtors, db.debtorPayments, db.transactions, async () => {
     await db.transactions.bulkDelete([debtor.linkedTransactionId, ...payments.map((item) => item.linkedTransactionId)].filter((id): id is string => Boolean(id)));
     await db.debtorPayments.where('debtorId').equals(debtorId).delete();
     await db.debtors.delete(debtorId);
   });
+  if (removeLinkedPurchase && linkedPurchase?.isDebtorCredit) await deletePurchase(linkedPurchase.id, false);
 }
 
 export async function deleteDebtorPayment(paymentId: string) {
@@ -1292,9 +1383,11 @@ export async function deleteDebtorPayment(paymentId: string) {
 
 
 
-export async function deletePurchase(purchaseId: string) {
+export async function deletePurchase(purchaseId: string, removeLinkedDebtors = true) {
   const linkedDebtors = await db.debtors.where('sharedPurchaseId').equals(purchaseId).toArray();
-  for (const debtor of linkedDebtors) await deleteDebtor(debtor.id);
+  if (removeLinkedDebtors) {
+    for (const debtor of linkedDebtors) await deleteDebtor(debtor.id, false);
+  }
   const installments = await db.installments.where('purchaseId').equals(purchaseId).toArray();
   const installmentIds = new Set(installments.map((item) => item.id));
   const payments = await db.invoicePayments.toArray();

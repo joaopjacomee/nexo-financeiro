@@ -133,6 +133,7 @@ export function FinancialCalendarPage({ month, setMonth, revision, showValues }:
       }
       for (const item of installments.filter((entry) => isTransactionVisibleByDate(entry.dueDate, today()))) {
         const purchase = purchaseMap.get(item.purchaseId);
+        if (purchase?.isFamilyDebt) continue;
         rows.push({ id: item.id, date: item.dueDate, title: purchase?.description ?? 'Compra no crédito', kind: 'installment', amountCents: item.amountCents, detail: 'Parcela ' + item.number + '/' + item.count + ' · Fatura' });
       }
       for (const move of reserves.filter((entry) => isTransactionVisibleByDate(entry.date, today()))) {

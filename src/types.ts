@@ -34,6 +34,10 @@ export interface Transaction {
 export interface Purchase {
   id: ID; description: string; totalCents: number; cardId: ID; categoryId?: ID; expenseClass?: ExpenseClass; purchaseDate: string;
   firstDueMonth: string; installmentsCount: number; createdAt: string; notes?: string;
+  /** Purchases created from a debt entry are linked to that debtor record. */
+  isDebtorCredit?: boolean;
+  /** Family card purchases use the card limit but are excluded from personal expenses and patrimony. */
+  isFamilyDebt?: boolean;
 }
 export interface Installment {
   id: ID; purchaseId: ID; cardId: ID; number: number; count: number; amountCents: number; paidCents: number;
