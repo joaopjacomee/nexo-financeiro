@@ -3,7 +3,7 @@ import { firstUsageMonth } from './format';
 import type {
   Account, Card, Category, CdiAccrual, CdiRate, Debtor, DebtorPayment, Installment, Investment,
   InvestmentMovement, InvoicePayment, MonthRecord, MonthlyBudget, Purchase, Reserve, ReserveClosing, ReserveMovement,
-  Setting, Transaction, Transfer, WishlistPurchase,
+  Setting, Transaction, Transfer, WishlistPurchase, RecurringTransaction, TransactionTemplate,
 } from '../types';
 
 class NexoDatabase extends Dexie {
@@ -28,6 +28,8 @@ class NexoDatabase extends Dexie {
   cdiAccruals!: Table<CdiAccrual, string>;
   settings!: Table<Setting, string>;
   wishlistPurchases!: Table<WishlistPurchase, string>;
+  recurringTransactions!: Table<RecurringTransaction, string>;
+  transactionTemplates!: Table<TransactionTemplate, string>;
 
   constructor() {
     super('NexoFinanceiro');
@@ -58,6 +60,11 @@ class NexoDatabase extends Dexie {
     });
     this.version(3).stores({
       reserveClosings: 'id, reserveId, month, [reserveId+month]',
+    });
+    this.version(4).stores({
+      transactions: 'id, type, date, month, categoryId, status, accountId, paymentMode, recurringId, [recurringId+recurringDate]',
+      recurringTransactions: 'id, active, startDate, frequency',
+      transactionTemplates: 'id, name, type',
     });
   }
 }

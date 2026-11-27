@@ -149,3 +149,15 @@ export function isMonthInAccountingPeriod(month: string): boolean {
 export function isExpenseInAccountingPeriod(date: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) && date.slice(0, 7) >= FINANCIAL_START_MONTH;
 }
+
+
+/** A future movement becomes visible exactly one calendar month before its date. */
+export function isTransactionVisibleByDate(date: string, referenceDate: string): boolean {
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date) || !/^\\d{4}-\\d{2}-\\d{2}$/.test(referenceDate)) return false;
+  if (date <= referenceDate) return true;
+  const [year, month, day] = date.split('-').map(Number);
+  const previousMonth = new Date(Date.UTC(year, month - 2, 1));
+  const lastDay = new Date(Date.UTC(previousMonth.getUTCFullYear(), previousMonth.getUTCMonth() + 1, 0)).getUTCDate();
+  const visibleFrom = [String(previousMonth.getUTCFullYear()).padStart(4, '0'), String(previousMonth.getUTCMonth() + 1).padStart(2, '0'), String(Math.min(day, lastDay)).padStart(2, '0')].join('-');
+  return referenceDate >= visibleFrom;
+}

@@ -1,6 +1,6 @@
 import type { Account, Card, Debtor, Installment, Reserve, Transaction } from '../types';
 import { db } from './db';
-import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents, FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod } from './calculations';
+import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents, FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate } from './calculations';
 import { thisMonth, today } from './format';
 
 export interface AccountBalance { account: Account; balanceCents: number; }
@@ -18,7 +18,7 @@ export async function getAccountBalances(): Promise<AccountBalance[]> {
   return accounts.map((account) => {
     let balance = account.initialBalanceCents;
     for (const tx of transactions) {
-      if (tx.accountId !== account.id || tx.status === 'cancelled' || (tx.type === 'expense' && !isExpenseInAccountingPeriod(tx.date))) continue;
+      if (tx.accountId !== account.id || tx.date > today() || tx.status === 'cancelled' || (tx.type === 'expense' && !isExpenseInAccountingPeriod(tx.date))) continue;
       const isActual = tx.type === 'income' ? tx.status === 'received' || tx.status === 'paid' : tx.status === 'paid';
       if (!isActual) continue;
       balance += tx.type === 'income' ? tx.amountCents : -tx.amountCents;
@@ -54,7 +54,7 @@ export async function getMonthSummary(month: string): Promise<MonthSummary> {
     db.installments.where('dueMonth').equals(month).toArray(),
     db.reserveMovements.where('date').between(`${month}-01`, `${month}-31`, true, true).toArray(),
   ]);
-  const valid = transactions.filter((tx) => tx.status !== 'cancelled');
+  const valid = transactions.filter((tx) => tx.status !== 'cancelled' && isTransactionVisibleByDate(tx.date, today()));
   const incomes = valid.filter((tx) => tx.type === 'income');
   const expenses = valid.filter((tx) => tx.type === 'expense' && isExpenseInAccountingPeriod(tx.date));
   const receivedCents = incomes.filter((tx) => tx.status === 'received' || tx.status === 'paid').reduce((sum, tx) => sum + tx.amountCents, 0);
@@ -116,7 +116,7 @@ export async function getCategorySpend(month: string) {
     db.categories.toArray(), db.transactions.where('month').equals(month).toArray(), db.installments.where('dueMonth').equals(month).toArray(), db.purchases.toArray(),
   ]);
   return categories.map((category) => {
-    const direct = transactions.filter((tx) => tx.type === 'expense' && tx.status !== 'cancelled' && isExpenseInAccountingPeriod(tx.date) && tx.categoryId === category.id).reduce((sum, tx) => sum + tx.amountCents, 0);
+    const direct = transactions.filter((tx) => tx.type === 'expense' && tx.status !== 'cancelled' && isTransactionVisibleByDate(tx.date, today()) && isExpenseInAccountingPeriod(tx.date) && tx.categoryId === category.id).reduce((sum, tx) => sum + tx.amountCents, 0);
     const purchaseIds = new Set(purchases.filter((purchase) => purchase.categoryId === category.id).map((purchase) => purchase.id));
     const credit = isMonthInAccountingPeriod(month) ? installments.filter((item) => purchaseIds.has(item.purchaseId)).reduce((sum, item) => sum + item.amountCents, 0) : 0;
     return { category, spentCents: direct + credit };
@@ -124,7 +124,7 @@ export async function getCategorySpend(month: string) {
 }
 
 export async function getTransactionsForMonth(month: string): Promise<Transaction[]> {
-  const rows = await db.transactions.where('month').equals(month).sortBy('date');
+  const rows = (await db.transactions.where('month').equals(month).sortBy('date')).filter((item) => isTransactionVisibleByDate(item.date, today()));
   return rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
 }
 

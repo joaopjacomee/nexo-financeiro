@@ -12,10 +12,24 @@ export interface Account {
 export interface Card {
   id: ID; name: string; institution: string; brand: string; limitCents: number; closingDay: number; dueDay: number; color: string; createdAt: string; kind?: 'credit';
 }
+export type RecurringFrequency = 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'yearly';
+
+export interface RecurringTransaction {
+  id: ID; type: 'income' | 'expense'; description: string; amountCents: number; frequency: RecurringFrequency;
+  startDate: string; endDate?: string; categoryId?: ID; expenseClass?: ExpenseClass;
+  paymentMode: 'pix' | 'cash' | 'card-debit' | 'other'; accountId?: ID; notes?: string;
+  active: boolean; excludedDates?: string[]; createdAt: string;
+}
+export interface TransactionTemplate {
+  id: ID; name: string; type: 'income' | 'expense'; description: string; amountCents: number;
+  categoryId?: ID; expenseClass?: ExpenseClass; paymentMode: 'pix' | 'cash' | 'card-debit' | 'other';
+  accountId?: ID; notes?: string; createdAt: string;
+}
+
 export interface Transaction {
   id: ID; type: 'income' | 'expense'; description: string; amountCents: number; date: string; month: string;
   categoryId?: ID; expenseClass?: ExpenseClass; status: TxStatus; paymentMode: 'pix' | 'cash' | 'card-debit' | 'card-credit' | 'other' | 'reserve-plans';
-  accountId?: ID; reserveId?: ID; notes?: string; createdAt: string;
+  accountId?: ID; reserveId?: ID; notes?: string; recurringId?: ID; recurringDate?: string; createdAt: string;
 }
 export interface Purchase {
   id: ID; description: string; totalCents: number; cardId: ID; categoryId?: ID; expenseClass?: ExpenseClass; purchaseDate: string;
@@ -67,4 +81,4 @@ export interface CdiRate { id: string; date: string; annualRate: number; source:
 export interface CdiAccrual { id: string; investmentId: ID; date: string; rateDaily: number; amountCents: number; balanceAfterCents: number; }
 export interface Setting { key: string; value: unknown; }
 
-export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'forecast' | 'patrimony' | 'settings' | 'wishlist';
+export type PageKey = 'dashboard' | 'months' | 'calendar' | 'transactions' | 'recurring' | 'comparison' | 'templates' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'forecast' | 'patrimony' | 'settings' | 'wishlist';

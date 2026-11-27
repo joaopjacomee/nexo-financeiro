@@ -1,7 +1,7 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
 import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, isBrazilBankBusinessDay, splitInstallmentCents, FINANCIAL_START_MONTH } from './calculations';
-import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction } from '../types';
+import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction, RecurringTransaction, RecurringFrequency, TransactionTemplate } from '../types';
 
 type SharedDebtInput = { id?: string; person: string; amountCents: number };
 function normalizeSharedDebtInputs(value?: SharedDebtInput | SharedDebtInput[]): SharedDebtInput[] {
@@ -137,7 +137,117 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
   return value;
 }
 
+
+function recurringDateAtIndex(startDate: string, frequency: RecurringFrequency, index: number): string {
+  const [year, month, day] = startDate.split('-').map(Number);
+  if (frequency === 'daily' || frequency === 'weekly' || frequency === 'biweekly') {
+    const step = frequency === 'daily' ? 1 : frequency === 'weekly' ? 7 : 14;
+    return new Date(Date.UTC(year, month - 1, day + index * step)).toISOString().slice(0, 10);
+  }
+  if (frequency === 'monthly') {
+    const target = new Date(Date.UTC(year, month - 1 + index, 1));
+    const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), Math.min(day, lastDay))).toISOString().slice(0, 10);
+  }
+  const targetYear = year + index;
+  const lastDay = new Date(Date.UTC(targetYear, month, 0)).getUTCDate();
+  return new Date(Date.UTC(targetYear, month - 1, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+function firstRecurringIndex(startDate: string, minDate: string, frequency: RecurringFrequency): number {
+  if (minDate <= startDate) return 0;
+  const [sy, sm] = startDate.split('-').map(Number);
+  const [my, mm] = minDate.split('-').map(Number);
+  const monthGap = (my - sy) * 12 + mm - sm;
+  const dayGap = Math.floor((Date.parse(minDate + 'T00:00:00Z') - Date.parse(startDate + 'T00:00:00Z')) / 86400000);
+  if (frequency === 'daily') return Math.max(0, dayGap);
+  if (frequency === 'weekly') return Math.max(0, Math.ceil(dayGap / 7));
+  if (frequency === 'biweekly') return Math.max(0, Math.ceil(dayGap / 14));
+  if (frequency === 'monthly') return Math.max(0, monthGap);
+  return Math.max(0, my - sy);
+}
+
+export async function saveRecurringTransaction(input: Omit<RecurringTransaction, 'id' | 'createdAt' | 'active' | 'excludedDates'> & { id?: string }) {
+  if (!input.description.trim()) throw new Error('Informe a descrição da movimentação recorrente.');
+  if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor recorrente válido.');
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(input.startDate)) throw new Error('Informe uma data inicial válida.');
+  if (input.endDate && (!/^\\d{4}-\\d{2}-\\d{2}$/.test(input.endDate) || input.endDate < input.startDate)) throw new Error('A data final deve ser igual ou posterior à data inicial.');
+  if (!['daily', 'weekly', 'biweekly', 'monthly', 'yearly'].includes(input.frequency)) throw new Error('Selecione uma frequência.');
+  if (!['pix', 'cash', 'card-debit', 'other'].includes(input.paymentMode)) throw new Error('Forma de pagamento não compatível com recorrência.');
+  if (input.paymentMode !== 'other' && (!input.accountId || !(await db.accounts.get(input.accountId)))) throw new Error('Selecione uma conta válida para a recorrência.');
+  const existing = input.id ? await db.recurringTransactions.get(input.id) : undefined;
+  if (input.id && !existing) throw new Error('Movimentação recorrente não encontrada.');
+  const value: RecurringTransaction = { ...input, id: input.id ?? makeId(), active: true, excludedDates: existing?.excludedDates ?? [], createdAt: existing?.createdAt ?? new Date().toISOString() };
+  await db.recurringTransactions.put(value);
+  await syncRecurringTransactions();
+  return value;
+}
+
+export async function syncRecurringTransactions(referenceDate = today()): Promise<number> {
+  const rules = await db.recurringTransactions.filter((item) => item.active).toArray();
+  let createdCount = 0;
+  const financialStart = FINANCIAL_START_MONTH + '-01';
+  for (const rule of rules) {
+    const effectiveStart = rule.startDate < financialStart ? financialStart : rule.startDate;
+    let index = firstRecurringIndex(rule.startDate, effectiveStart, rule.frequency);
+    for (let generated = 0; generated < 5000; generated += 1, index += 1) {
+      const date = recurringDateAtIndex(rule.startDate, rule.frequency, index);
+      if (date < effectiveStart) continue;
+      if (rule.endDate && date > rule.endDate) break;
+      if (!isTransactionVisibleByDate(date, referenceDate)) break;
+      if (rule.excludedDates?.includes(date)) continue;
+      const existing = await db.transactions.where('[recurringId+recurringDate]').equals([rule.id, date]).first();
+      if (existing) {
+        if (date <= referenceDate && (existing.status === 'pending' || existing.status === 'receivable')) {
+          await db.transactions.update(existing.id, { status: existing.type === 'income' ? 'received' : 'paid' });
+        }
+        continue;
+      }
+      try {
+        await saveTransaction({
+          type: rule.type, description: rule.description, amountCents: rule.amountCents, date,
+          categoryId: rule.categoryId, expenseClass: rule.type === 'expense' ? rule.expenseClass : undefined,
+          status: date > referenceDate ? (rule.type === 'income' ? 'receivable' : 'pending') : (rule.type === 'income' ? 'received' : 'paid'),
+          paymentMode: rule.paymentMode, accountId: rule.accountId, notes: rule.notes,
+          recurringId: rule.id, recurringDate: date,
+        });
+        createdCount += 1;
+      } catch (error) {
+        console.warn('Não foi possível gerar a recorrência ' + rule.description + ' em ' + date + '.', error);
+      }
+    }
+  }
+  return createdCount;
+}
+
+export async function deleteRecurringTransaction(id: string) {
+  const rule = await db.recurringTransactions.get(id);
+  if (!rule) return;
+  const generated = await db.transactions.where('recurringId').equals(id).toArray();
+  const futureIds = generated.filter((item) => item.date > today()).map((item) => item.id);
+  await db.transaction('rw', db.transactions, db.recurringTransactions, async () => {
+    if (futureIds.length) await db.transactions.bulkDelete(futureIds);
+    await db.recurringTransactions.delete(id);
+  });
+}
+
+export async function saveTransactionTemplate(input: Omit<TransactionTemplate, 'id' | 'createdAt'> & { id?: string }) {
+  if (!input.name.trim() || !input.description.trim()) throw new Error('Informe o nome do modelo e a descrição.');
+  if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor válido para o modelo.');
+  if (!['pix', 'cash', 'card-debit', 'other'].includes(input.paymentMode)) throw new Error('Forma de pagamento inválida para o modelo.');
+  if (input.paymentMode !== 'other' && (!input.accountId || !(await db.accounts.get(input.accountId)))) throw new Error('Selecione uma conta válida.');
+  const existing = input.id ? await db.transactionTemplates.get(input.id) : undefined;
+  const value: TransactionTemplate = { ...input, id: input.id ?? makeId(), createdAt: existing?.createdAt ?? new Date().toISOString() };
+  await db.transactionTemplates.put(value);
+  return value;
+}
+export async function deleteTransactionTemplate(id: string) { await db.transactionTemplates.delete(id); }
+
 export async function deleteTransaction(id: string) {
+  const recurringTransaction = await db.transactions.get(id);
+  if (recurringTransaction?.recurringId && recurringTransaction.recurringDate) {
+    const rule = await db.recurringTransactions.get(recurringTransaction.recurringId);
+    if (rule) await db.recurringTransactions.update(rule.id, { excludedDates: [...new Set([...(rule.excludedDates ?? []), recurringTransaction.recurringDate])] });
+  }
   const sharedDebtors = await db.debtors.where('sharedExpenseId').equals(id).toArray();
   if (sharedDebtors.length) {
     for (const debtor of sharedDebtors) await deleteDebtor(debtor.id);
@@ -1096,9 +1206,9 @@ export async function exportBackup() {
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
-    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases', 'recurringTransactions', 'transactionTemplates',
   ] as const;
-  const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 3, exportedAt: new Date().toISOString() };
+  const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 4, exportedAt: new Date().toISOString() };
   for (const table of tables) payload[table] = await db.table(table).toArray();
   return payload;
 }
@@ -1108,16 +1218,17 @@ export async function restoreBackup(payload: unknown, replace = false) {
     throw new Error('Arquivo de backup inválido ou versão não suportada.');
   }
   const schemaVersion = (payload as { schemaVersion?: number }).schemaVersion;
-  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3) throw new Error('Arquivo de backup inválido ou versão não suportada.');
+  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4) throw new Error('Arquivo de backup inválido ou versão não suportada.');
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
-    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases', 'recurringTransactions', 'transactionTemplates',
   ] as const;
   const data = payload as Record<string, unknown>;
   for (const table of tables) {
     if (table === 'wishlistPurchases' && data[table] === undefined && schemaVersion === 1) data[table] = [];
     if (table === 'reserveClosings' && data[table] === undefined && schemaVersion < 3) data[table] = [];
+    if ((table === 'recurringTransactions' || table === 'transactionTemplates') && data[table] === undefined && schemaVersion < 4) data[table] = [];
     if (!Array.isArray(data[table])) throw new Error(`Backup sem a coleção ${table}.`);
   }
   await db.transaction('rw', tables.map((table) => db.table(table)), async () => {
@@ -1347,7 +1458,7 @@ export async function clearTestData() {
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
-    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
+    'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases', 'recurringTransactions', 'transactionTemplates',
   ] as const;
   await db.transaction('rw', tables.map((name) => db.table(name)), async () => {
     for (const name of tables) await db.table(name).clear();
