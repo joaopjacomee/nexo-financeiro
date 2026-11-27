@@ -10,7 +10,8 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
   const { sharedWith, ...transactionInput } = input;
   if (!transactionInput.description.trim()) throw new Error('Informe uma descrição.');
   if (!Number.isSafeInteger(transactionInput.amountCents) || transactionInput.amountCents <= 0) throw new Error('Informe um valor válido maior que zero.');
-  if (transactionInput.status !== 'cancelled' && transactionInput.paymentMode !== 'other' && !transactionInput.accountId) throw new Error('Selecione a conta utilizada.');
+  if (transactionInput.status !== 'cancelled' && !['other', 'reserve-plans'].includes(transactionInput.paymentMode) && !transactionInput.accountId) throw new Error('Selecione a conta utilizada.');
+  if (transactionInput.paymentMode === 'reserve-plans' && transactionInput.type !== 'expense') throw new Error('Reserva de planos só pode ser usada em despesas.');
   if (sharedWith && transactionInput.type !== 'expense') throw new Error('Somente despesas podem ser divididas.');
   if (sharedWith && transactionInput.paymentMode === 'card-credit') throw new Error('A divisão está disponível para despesas fora do cartão de crédito.');
   if (sharedWith && (!Number.isSafeInteger(sharedWith.amountCents) || sharedWith.amountCents <= 0 || sharedWith.amountCents >= transactionInput.amountCents)) {
@@ -37,6 +38,18 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     ? await db.debtorPayments.where('debtorId').equals(existingShared.id).toArray()
     : [];
   const alreadyReceivedCents = existingPayments.reduce((sum, payment) => sum + payment.amountCents, 0);
+  const existingReserveMovement = transactionInput.id
+    ? await db.reserveMovements.filter((item) => item.linkedTransactionId === transactionInput.id).first()
+    : undefined;
+  let plansReserve = undefined;
+  if (transactionInput.paymentMode === 'reserve-plans') {
+    plansReserve = await db.reserves.filter((item) => item.name.trim().toLocaleLowerCase('pt-BR') === 'planos' && !item.closed).first();
+    if (!plansReserve) throw new Error('Crie ou reabra a caixinha Planos antes de usar esta forma de pagamento.');
+    const reserveMoves = await db.reserveMovements.where('reserveId').equals(plansReserve.id).toArray();
+    const balance = reserveMoves.reduce((sum, item) => sum + (item.type === 'withdrawal' ? -item.amountCents : item.amountCents), 0);
+    const restored = existingReserveMovement?.reserveId === plansReserve.id ? existingReserveMovement.amountCents : 0;
+    if (transactionInput.amountCents > balance + restored) throw new Error('O saldo da caixinha Planos é insuficiente.');
+  }
 
   if (existingShared && sharedWith && normalizePerson(existingShared.person) !== normalizePerson(personRecord!.person) && alreadyReceivedCents > 0) {
     throw new Error('Esta divisão já tem pagamentos. Não é possível trocar a pessoa depois de receber parte do valor.');
@@ -48,8 +61,19 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     throw new Error('Esta divisão já tem pagamentos. Remova ou ajuste os recebimentos antes de desfazer a divisão.');
   }
 
-  await db.transaction('rw', db.transactions, db.months, db.debtors, db.debtorPayments, async () => {
-    await db.transactions.put(value);
+  await db.transaction('rw', db.transactions, db.months, db.debtors, db.debtorPayments, db.reserves, db.reserveMovements, async () => {
+    if (existingReserveMovement) await db.reserveMovements.delete(existingReserveMovement.id);
+    const transactionValue: Transaction = {
+      ...value,
+      accountId: transactionInput.paymentMode === 'reserve-plans' ? undefined : value.accountId,
+      reserveId: plansReserve?.id,
+    };
+    await db.transactions.put(transactionValue);
+    if (plansReserve) await db.reserveMovements.add({
+      id: makeId(), reserveId: plansReserve.id, type: 'withdrawal', amountCents: transactionInput.amountCents,
+      date: transactionInput.date, notes: `Despesa: ${transactionInput.description.trim()}`, linkedTransactionId: transactionValue.id,
+      availableBalanceImpactCents: 0,
+    });
     await db.months.put({ id: value.month, month: value.month, createdAt: new Date().toISOString() });
 
     if (sharedWith && personRecord) {
@@ -82,10 +106,12 @@ export async function deleteTransaction(id: string) {
     const isSharedExpense = debtor.sharedExpenseId === id;
     await deleteDebtor(debtor.id);
     if (isSharedExpense) await db.transactions.delete(id);
+    await db.reserveMovements.filter((item) => item.linkedTransactionId === id).delete();
     return;
   }
   const payment = await db.debtorPayments.filter((item) => item.linkedTransactionId === id).first();
   if (payment) return deleteDebtorPayment(payment.id);
+  await db.reserveMovements.filter((item) => item.linkedTransactionId === id).delete();
   await db.transactions.delete(id);
 }
 
