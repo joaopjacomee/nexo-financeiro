@@ -593,12 +593,11 @@ export async function deleteAccount(accountId: string) {
       const account = await db.accounts.get(accountId);
       if (!account) return;
 
-      const [accountTransactions, transfers, invoicePayments, debtors, debtorPayments, investmentMovements] = await Promise.all([
+      const [accountTransactions, transfers, invoicePayments, debtors, investmentMovements] = await Promise.all([
         db.transactions.where('accountId').equals(accountId).toArray(),
         db.transfers.toArray().then((items) => items.filter((item) => item.fromAccountId === accountId || item.toAccountId === accountId)),
         db.invoicePayments.where('accountId').equals(accountId).toArray(),
         db.debtors.where('originAccountId').equals(accountId).toArray(),
-        db.debtorPayments.where('accountId').equals(accountId).toArray(),
         db.investmentMovements.where('accountId').equals(accountId).toArray(),
       ]);
 
