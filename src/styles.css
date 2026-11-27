@@ -84,3 +84,16 @@
 
 /* Purchase installment editing affordances */
 .installment-edit-hint{color:#8f859b;font-size:9px;line-height:1.5}
+
+
+/* Multiple person debt links */
+.debt-links-editor{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid #eee7f5;border-radius:11px;background:#fdfbff}
+.debt-links-heading{display:flex;flex-direction:column;gap:4px}
+.debt-links-heading strong{font-size:11px;color:#5b496d}
+.debt-links-heading span,.debt-links-footer small{font-size:9px;color:#94899f;line-height:1.45}
+.debt-link-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 30px;gap:9px;align-items:end;padding:9px;background:#fff;border:1px solid #f0ebf5;border-radius:9px}
+.debt-link-row .form-field{margin:0;min-width:0}
+.debt-link-remove{margin-bottom:1px}
+.debt-links-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.debt-links-footer small{flex:1;min-width:150px}
+@media(max-width:520px){.debt-link-row{grid-template-columns:minmax(0,1fr) 30px}.debt-link-row .form-field:first-child{grid-column:1/-1}.debt-link-remove{grid-column:2;grid-row:2}}

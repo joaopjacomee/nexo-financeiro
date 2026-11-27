@@ -458,13 +458,12 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     const categoryId = String(payload.get('categoryId') || '') || undefined;
     const notes = String(payload.get('notes') || '');
     const expenseClass = String(payload.get('expenseClass') || 'Essencial') as Transaction['expenseClass'];
-    const splitPerson = type === 'expense' ? String(payload.get('splitPerson') || '').trim() : '';
-    const sharedWith = splitPerson ? { person: splitPerson, amountCents: toCents(String(payload.get('splitAmount') || '0')) } : undefined;
+    const sharedWith = JSON.parse(String(payload.get('sharedWith') || '[]')) as Array<{ id?: string; person: string; amountCents: number }>;
     if (editing?.paymentMode === 'card-credit') { await act(async () => { throw new Error('Para alterar uma compra parcelada, exclua o parcelamento atual e registre a compra novamente.'); }); return; }
     const ok = await act(() => paymentMode === 'card-credit'
       ? createCardPurchase({ description: String(payload.get('description') ?? ''), totalCents: toCents(raw), cardId: String(payload.get('cardId') || ''), installmentsCount: Number(payload.get('installmentsCount') || 1), purchaseDate: String(payload.get('date')), firstDueMonth: String(payload.get('firstDueMonth') || addMonths(String(payload.get('date')).slice(0, 7), 1)), categoryId, expenseClass, notes, sharedWith })
       : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, reserveId: paymentMode === 'reserve-plans' ? String(payload.get('reserveId') || '') || undefined : undefined, notes, sharedWith }),
-      editing ? 'Movimentação atualizada.' : splitPerson ? `Despesa registrada; a parte de ${splitPerson} foi adicionada a Devedores.` : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
+      editing ? 'Movimentação atualizada.' : sharedWith.length ? 'Despesa registrada e ' + sharedWith.length + ' dívida(s) vinculada(s).' : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
     if (ok) { const savedMonth = String(payload.get('date') ?? '').slice(0, 7); if (/^\d{4}-\d{2}$/.test(savedMonth)) setMonth(savedMonth); setModal(false); setEditing(null); }
   };
   const accountName = (id?: string) => data.accounts.find((acc) => acc.id === id)?.name ?? '—';
@@ -489,16 +488,13 @@ function TransactionModal({ data, month, editing, privateSectionsUnlocked, onClo
   const initialDate = editing?.date ?? (currentDate.slice(0, 7) === month ? currentDate : `${month}-01`);
   const [type, setType] = useState<'income' | 'expense'>(editing?.type ?? 'expense');
   const [mode, setMode] = useState<Transaction['paymentMode']>(editing?.paymentMode ?? 'pix');
-  const existingSplit = editing ? data.debtors.find((item) => item.sharedExpenseId === editing.id) : undefined;
-  const knownPeople = Array.from(new Map(data.debtors.map((item) => {
-    const person = item.person.trim();
-    return [person.toLocaleLowerCase('pt-BR'), person] as const;
-  })).values());
+  const existingSplits = editing ? data.debtors.filter((item) => item.sharedExpenseId === editing.id) : [];
+  const knownPeople = Array.from(new Set(data.debtors.map((item) => item.person.trim()).filter(Boolean)));
+  const [linkedDebts, setLinkedDebts] = useState<DebtLinkDraft[]>(existingSplits.map((item) => ({
+    id: item.id, person: item.person, amount: fromCents(item.originalCents),
+  })));
   const [expenseClass, setExpenseClass] = useState<NonNullable<Transaction['expenseClass']>>(editing?.expenseClass ?? 'Essencial');
-  const [splitPerson, setSplitPerson] = useState(existingSplit?.person ?? '');
   const [amount, setAmount] = useState(editing ? fromCents(editing.amountCents) : '');
-  const totalCents = toCents(amount || '0');
-  const splitAmount = Number.isSafeInteger(totalCents) && totalCents > 0 ? Math.floor(totalCents / 2) : 0;
   const [purchaseDate, setPurchaseDate] = useState(initialDate);
   const [firstDueMonth, setFirstDueMonth] = useState(addMonths(initialDate.slice(0, 7), 1));
   const [saving, setSaving] = useState(false);
@@ -511,20 +507,8 @@ function TransactionModal({ data, month, editing, privateSectionsUnlocked, onClo
     <Field label="Categoria"><select name="categoryId" defaultValue={editing?.categoryId ?? ''}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
     {type === 'expense' && <Field label="Classificação da despesa"><select name="expenseClass" value={expenseClass} onChange={(e) => setExpenseClass(e.target.value as NonNullable<Transaction['expenseClass']>)}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>}
     <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option>{type === 'expense' && <option value="card-credit">Cartão de crédito</option>}{type === 'expense' && privateSectionsUnlocked && <option value="reserve-plans">Reserva de planos</option>}<option value="other">Outro</option></select></Field>
-    {type === 'expense' && <>
-      <Field label="Dividir esta conta com">
-        <select name="splitPerson" value={splitPerson} onChange={(e) => setSplitPerson(e.target.value)}>
-          <option value="">Não dividir</option>
-          {knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}>{person}</option>)}
-        </select>
-      </Field>
-      {splitPerson && <>
-        <Field label={`Parte de ${splitPerson} (50%)`}>
-          <input name="splitAmount" value={fromCents(splitAmount)} readOnly/>
-        </Field>
-        <div className="form-footnote"><HandCoins size={15}/> O valor total permanece registrado na despesa ou compra. Metade fica como valor a receber de {splitPerson} na área Devedores.</div>
-      </>}
-    </>}
+    <input type="hidden" name="sharedWith" value={type === 'expense' ? JSON.stringify(linkedDebts.filter((item) => item.person.trim() || item.amount.trim()).map((item) => ({ id: item.id, person: item.person, amountCents: toCents(item.amount) }))) : '[]'}/>
+    {type === 'expense' && <DebtLinksEditor items={linkedDebts} onChange={setLinkedDebts} knownPeople={knownPeople} listId="nexo-transaction-debt-people"/>}
     {mode === 'card-credit' && type === 'expense' && <>
       <Field label="Cartão de crédito"><select name="cardId" required defaultValue={data.cards[0]?.id ?? ''}><option value="">Selecione o cartão</option>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
       <Field label="Quantidade de parcelas"><input name="installmentsCount" type="number" min="1" max="240" defaultValue="1" required/></Field>
@@ -590,46 +574,90 @@ function suggestFirstInvoiceMonth(purchaseDate: string, card?: Card) {
   const purchaseDay = Number(purchaseDate.slice(8, 10));
   return card && purchaseDay > card.closingDay ? addMonths(purchasedMonth, 1) : purchasedMonth;
 }
+
+type DebtLinkDraft = { id?: string; person: string; amount: string };
+
+function DebtLinksEditor({ items, onChange, knownPeople, listId }: {
+  items: DebtLinkDraft[];
+  onChange: (items: DebtLinkDraft[]) => void;
+  knownPeople: string[];
+  listId: string;
+}) {
+  const updateItem = (index: number, patch: Partial<DebtLinkDraft>) => {
+    onChange(items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
+  };
+  return <div className="field-wide debt-links-editor">
+    <div className="debt-links-heading">
+      <strong>Vincular valores a receber (opcional)</strong>
+      <span>Digite o nome de uma pessoa já cadastrada ou informe um nome novo para cadastrá-la automaticamente.</span>
+    </div>
+    {items.map((item, index) => <div className="debt-link-row" key={item.id ?? 'new-' + index}>
+      <Field label="Pessoa"><input list={listId} value={item.person} placeholder="Nome da pessoa" onChange={(event) => updateItem(index, { person: event.target.value })}/></Field>
+      <Field label="Valor a receber (R$)"><MoneyInput value={item.amount} onChange={(amount) => updateItem(index, { amount })}/></Field>
+      <button type="button" className="icon-button mini danger-icon debt-link-remove" title="Remover pessoa" aria-label="Remover pessoa" onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14}/></button>
+    </div>)}
+    <datalist id={listId}>{knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}/>)}</datalist>
+    <div className="debt-links-footer">
+      <Button variant="secondary" size="small" onClick={() => onChange([...items, { person: '', amount: '' }])}><Plus size={14}/> Adicionar pessoa</Button>
+      <small>Cada pessoa terá uma dívida individual em Devedores, com o valor informado acima.</small>
+    </div>
+  </div>;
+}
+
 function PurchaseModal({ data, onClose, act }: { data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
-  const [form, setForm] = useState({ description: '', total: '', cardId: data.cards[0]?.id ?? '', categoryId: '', expenseClass: 'Essencial' as NonNullable<Transaction['expenseClass']>, purchaseDate: today(), firstDueMonth: suggestFirstInvoiceMonth(today(), data.cards[0]), installmentsCount: '1', notes: '' });
-  const knownPeople = Array.from(new Map(data.debtors.map((item) => {
-    const person = item.person.trim();
-    return [person.toLocaleLowerCase('pt-BR'), person] as const;
-  })).values());
-  const [splitPerson, setSplitPerson] = useState('');
-  const splitTotalCents = toCents(form.total || '0');
-  const splitAmountCents = Number.isSafeInteger(splitTotalCents) && splitTotalCents > 0 ? Math.floor(splitTotalCents / 2) : 0;
-  const submit = () => act(() => createCardPurchase({
-    ...form,
-    totalCents: toCents(form.total),
-    installmentsCount: Number(form.installmentsCount),
-    categoryId: form.categoryId || undefined,
-    sharedWith: splitPerson ? { person: splitPerson, amountCents: splitAmountCents } : undefined,
-  }), splitPerson ? `Compra registrada; a parte de ${splitPerson} foi adicionada a Devedores.` : 'Compra e parcelas registradas.').then((ok) => { if (ok) onClose(); });
-  return <Modal title="Registrar compra no crédito" onClose={onClose}><div className="form-grid"><Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field><Field label="Valor total (R$)"><MoneyInput value={form.total} onChange={(total) => setForm({ ...form, total })}/></Field><Field label="Cartão"><select value={form.cardId} onChange={(e) => { const cardId = e.target.value; setForm({ ...form, cardId, firstDueMonth: suggestFirstInvoiceMonth(form.purchaseDate, data.cards.find((card) => card.id === cardId)) }); }}>{data.cards.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.institution}</option>)}</select></Field><Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}/></Field><Field label="Data da compra"><input type="date" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value, firstDueMonth: suggestFirstInvoiceMonth(e.target.value, data.cards.find((card) => card.id === form.cardId)) })}/></Field><Field label="Mês da primeira fatura"><input type="month" value={form.firstDueMonth} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field><Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label="Classificação"><select value={form.expenseClass} onChange={(e) => setForm({ ...form, expenseClass: e.target.value as NonNullable<Transaction['expenseClass']> })}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field><Field label="Dividir esta compra com"><select value={splitPerson} onChange={(e) => setSplitPerson(e.target.value)}><option value="">Não dividir</option>{knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}>{person}</option>)}</select></Field>{splitPerson && <><Field label={`Parte de ${splitPerson} (50%)`}><input value={money(splitAmountCents)} readOnly/></Field><div className="form-footnote"><HandCoins size={15}/> A parte de {splitPerson} será registrada em Devedores e poderá ser recebida depois.</div></>}<Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field><div className="form-footnote"><CreditCard size={15}/> A primeira fatura é sugerida pelo fechamento do cartão. Se a compra ocorreu após o fechamento, a primeira parcela vai para o mês seguinte; você ainda pode ajustar o mês manualmente.</div><div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!data.cards.length}>Criar parcelamento</Button></div></div></Modal>;
+  const [form, setForm] = useState({
+    description: '', total: '', cardId: data.cards[0]?.id ?? '', categoryId: '',
+    expenseClass: 'Essencial' as NonNullable<Transaction['expenseClass']>,
+    purchaseDate: today(), firstDueMonth: suggestFirstInvoiceMonth(today(), data.cards[0]),
+    installmentsCount: '1', notes: '',
+  });
+  const [linkedDebts, setLinkedDebts] = useState<DebtLinkDraft[]>([]);
+  const knownPeople = Array.from(new Set(data.debtors.map((item) => item.person.trim()).filter(Boolean)));
+  const submit = () => {
+    const sharedWith = linkedDebts
+      .filter((item) => item.person.trim() || item.amount.trim())
+      .map((item) => ({ person: item.person, amountCents: toCents(item.amount) }));
+    const success = sharedWith.length
+      ? 'Compra registrada e ' + sharedWith.length + ' vínculo(s) de dívida criado(s).'
+      : 'Compra e parcelas registradas.';
+    return act(() => createCardPurchase({
+      ...form, totalCents: toCents(form.total), installmentsCount: Number(form.installmentsCount),
+      categoryId: form.categoryId || undefined, sharedWith,
+    }), success).then((ok) => { if (ok) onClose(); });
+  };
+  return <Modal title="Registrar compra no crédito" onClose={onClose}>
+    <div className="form-grid">
+      <Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field>
+      <Field label="Valor total (R$)"><MoneyInput value={form.total} onChange={(total) => setForm({ ...form, total })}/></Field>
+      <Field label="Cartão"><select value={form.cardId} onChange={(e) => { const cardId = e.target.value; setForm({ ...form, cardId, firstDueMonth: suggestFirstInvoiceMonth(form.purchaseDate, data.cards.find((card) => card.id === cardId)) }); }}>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
+      <Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}/></Field>
+      <Field label="Data da compra"><input type="date" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value, firstDueMonth: suggestFirstInvoiceMonth(e.target.value, data.cards.find((card) => card.id === form.cardId)) })}/></Field>
+      <Field label="Mês da primeira fatura"><input type="month" value={form.firstDueMonth} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field>
+      <Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
+      <Field label="Classificação"><select value={form.expenseClass} onChange={(e) => setForm({ ...form, expenseClass: e.target.value as NonNullable<Transaction['expenseClass']> })}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>
+      <DebtLinksEditor items={linkedDebts} onChange={setLinkedDebts} knownPeople={knownPeople} listId="nexo-purchase-debt-people"/>
+      <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
+      <div className="form-footnote field-wide"><CreditCard size={15}/> A primeira fatura é sugerida pelo fechamento do cartão. Se a compra ocorreu após o fechamento, a primeira parcela vai para o mês seguinte; você ainda pode ajustar o mês manualmente.</div>
+      <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!data.cards.length}>Criar parcelamento</Button></div>
+    </div>
+  </Modal>;
 }
 
 function PurchaseEditModal({ purchase, data, act, onClose }: {
   purchase: Purchase; data: Snapshot; act: CommonProps['act']; onClose: () => void;
 }) {
-  const linkedDebtor = data.debtors.find((item) => item.sharedPurchaseId === purchase.id);
-  const knownPeople = Array.from(new Map(data.debtors.map((item) => {
-    const person = item.person.trim();
-    return [person.toLocaleLowerCase('pt-BR'), person] as const;
-  })).values());
+  const linkedDebtors = data.debtors.filter((item) => item.sharedPurchaseId === purchase.id);
+  const knownPeople = Array.from(new Set(data.debtors.map((item) => item.person.trim()).filter(Boolean)));
   const [form, setForm] = useState({
-    description: purchase.description,
-    total: fromCents(purchase.totalCents),
-    cardId: purchase.cardId,
+    description: purchase.description, total: fromCents(purchase.totalCents), cardId: purchase.cardId,
     categoryId: purchase.categoryId ?? '',
     expenseClass: (purchase.expenseClass ?? 'Essencial') as NonNullable<Transaction['expenseClass']>,
-    purchaseDate: purchase.purchaseDate,
-    firstDueMonth: purchase.firstDueMonth,
-    installmentsCount: String(purchase.installmentsCount),
-    splitPerson: linkedDebtor?.person ?? '',
-    splitAmount: fromCents(linkedDebtor?.originalCents ?? Math.floor(purchase.totalCents / 2)),
-    notes: purchase.notes ?? '',
+    purchaseDate: purchase.purchaseDate, firstDueMonth: purchase.firstDueMonth,
+    installmentsCount: String(purchase.installmentsCount), notes: purchase.notes ?? '',
   });
+  const [linkedDebts, setLinkedDebts] = useState<DebtLinkDraft[]>(linkedDebtors.map((item) => ({
+    id: item.id, person: item.person, amount: fromCents(item.originalCents),
+  })));
   const [hasPayments, setHasPayments] = useState(false);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -638,27 +666,21 @@ function PurchaseEditModal({ purchase, data, act, onClose }: {
       .then((items) => { if (active) setHasPayments(items.some((item) => item.paidCents > 0)); });
     return () => { active = false; };
   }, [purchase.id]);
-
   const submit = async () => {
     setSaving(true);
     try {
+      const sharedWith = linkedDebts
+        .filter((item) => item.person.trim() || item.amount.trim())
+        .map((item) => ({ id: item.id, person: item.person, amountCents: toCents(item.amount) }));
       const ok = await act(() => updateCardPurchase({
-        id: purchase.id,
-        description: form.description,
-        totalCents: toCents(form.total),
-        cardId: form.cardId,
-        categoryId: form.categoryId || undefined,
-        expenseClass: form.expenseClass,
-        purchaseDate: form.purchaseDate,
-        firstDueMonth: form.firstDueMonth,
-        installmentsCount: Number(form.installmentsCount),
-        notes: form.notes,
-        sharedWith: form.splitPerson ? { person: form.splitPerson, amountCents: toCents(form.splitAmount) } : undefined,
+        id: purchase.id, description: form.description, totalCents: toCents(form.total),
+        cardId: form.cardId, categoryId: form.categoryId || undefined, expenseClass: form.expenseClass,
+        purchaseDate: form.purchaseDate, firstDueMonth: form.firstDueMonth,
+        installmentsCount: Number(form.installmentsCount), notes: form.notes, sharedWith,
       }), 'Parcelamento atualizado.');
       if (ok) onClose();
     } finally { setSaving(false); }
   };
-
   return <Modal title="Editar parcelamento" onClose={onClose}>
     <div className="form-grid">
       <Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field>
@@ -669,8 +691,7 @@ function PurchaseEditModal({ purchase, data, act, onClose }: {
       <Field label="Primeira fatura"><input type="month" value={form.firstDueMonth} disabled={hasPayments} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field>
       <Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
       <Field label="Classificação"><select value={form.expenseClass} onChange={(e) => setForm({ ...form, expenseClass: e.target.value as NonNullable<Transaction['expenseClass']> })}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>
-      <Field label="Pessoa com valor a receber"><select value={form.splitPerson} onChange={(e) => setForm({ ...form, splitPerson: e.target.value, splitAmount: e.target.value && !form.splitPerson ? fromCents(Math.floor(toCents(form.total) / 2)) : form.splitAmount })}><option value="">Não vincular dívida</option>{knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}>{person}</option>)}</select></Field>
-      {form.splitPerson && <Field label={'Valor a receber de ' + form.splitPerson + ' (R$)'}><MoneyInput value={form.splitAmount} onChange={(splitAmount) => setForm({ ...form, splitAmount })}/></Field>}
+      <DebtLinksEditor items={linkedDebts} onChange={setLinkedDebts} knownPeople={knownPeople} listId="nexo-edit-purchase-debt-people"/>
       <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
       {hasPayments
         ? <div className="form-footnote field-wide"><ShieldCheck size={15}/> Já existe pagamento de fatura vinculado. Você ainda pode editar descrição, valor, data da compra, categoria e demais detalhes; cartão, quantidade de parcelas e primeira fatura ficam bloqueados para preservar os pagamentos.</div>
