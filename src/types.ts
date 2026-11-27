@@ -14,8 +14,8 @@ export interface Card {
 }
 export interface Transaction {
   id: ID; type: 'income' | 'expense'; description: string; amountCents: number; date: string; month: string;
-  categoryId?: ID; expenseClass?: ExpenseClass; status: TxStatus; paymentMode: 'pix' | 'cash' | 'card-debit' | 'card-credit' | 'other';
-  accountId?: ID; notes?: string; createdAt: string;
+  categoryId?: ID; expenseClass?: ExpenseClass; status: TxStatus; paymentMode: 'pix' | 'cash' | 'card-debit' | 'card-credit' | 'other' | 'reserve-plans';
+  accountId?: ID; reserveId?: ID; notes?: string; createdAt: string;
 }
 export interface Purchase {
   id: ID; description: string; totalCents: number; cardId: ID; categoryId?: ID; expenseClass?: ExpenseClass; purchaseDate: string;
@@ -45,7 +45,7 @@ export interface Reserve {
 export interface ReserveMovement {
   id: ID; reserveId: ID; type: 'deposit' | 'withdrawal' | 'yield'; amountCents: number; date: string; notes?: string;
   /** Only the amount added to the reserve after this feature was enabled affects free bank cash. */
-  availableBalanceImpactCents?: number;
+  availableBalanceImpactCents?: number; linkedTransactionId?: ID;
 }
 export interface WishlistPurchase {
   id: ID; description: string; amountCents: number; date: string; notes?: string; createdAt: string;
