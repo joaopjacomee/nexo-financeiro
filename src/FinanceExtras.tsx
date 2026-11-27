@@ -98,7 +98,7 @@ export function RecurringTransactionsPage({ data, revision, showValues, act }: E
   </>;
 }
 
-type CalendarEvent = { id: string; date: string; title: string; kind: 'income' | 'expense' | 'installment' | 'reserve'; amountCents: number; detail: string };
+type CalendarEvent = { id: string; date: string; title: string; kind: 'income' | 'expense' | 'installment' | 'reserve' | 'card-due'; amountCents: number; detail: string };
 export function FinancialCalendarPage({ month, setMonth, revision, showValues }: ExtraProps) {
   const [selectedDate, setSelectedDate] = useState(month + '-01');
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -110,13 +110,27 @@ export function FinancialCalendarPage({ month, setMonth, revision, showValues }:
       getInstallmentsForMonth(month),
       db.purchases.toArray(),
       db.reserveMovements.where('date').between(month + '-01', month + '-31', true, true).toArray(),
-    ]).then(([transactions, installments, purchases, reserves]) => {
+      db.cards.toArray(),
+    ]).then(([transactions, installments, purchases, reserves, cards]) => {
       if (!active) return;
       const rows: CalendarEvent[] = transactions.filter((item) => item.status !== 'cancelled' && isTransactionVisibleByDate(item.date, today())).map((item) => ({
         id: item.id, date: item.date, title: item.description, kind: item.type, amountCents: item.amountCents,
         detail: item.type === 'income' ? 'Entrada' : 'Saída',
       }));
       const purchaseMap = new Map(purchases.map((item) => [item.id, item]));
+      for (const card of cards) {
+        const cardInstallments = installments.filter((item) => item.cardId === card.id);
+        if (!cardInstallments.length) continue;
+        const lastDay = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+        const dueDate = month + '-' + String(Math.min(Math.max(1, card.dueDay), lastDay)).padStart(2, '0');
+        if (!isTransactionVisibleByDate(dueDate, today())) continue;
+        const remainingCents = cardInstallments.reduce((total, item) => total + Math.max(0, item.amountCents - item.paidCents), 0);
+        rows.push({
+          id: 'card-due-' + card.id + '-' + month, date: dueDate, title: 'Vencimento · ' + card.name,
+          kind: 'card-due', amountCents: remainingCents,
+          detail: remainingCents > 0 ? 'Vencimento da fatura' : 'Fatura paga',
+        });
+      }
       for (const item of installments.filter((entry) => isTransactionVisibleByDate(entry.dueDate, today()))) {
         const purchase = purchaseMap.get(item.purchaseId);
         rows.push({ id: item.id, date: item.dueDate, title: purchase?.description ?? 'Compra no crédito', kind: 'installment', amountCents: item.amountCents, detail: 'Parcela ' + item.number + '/' + item.count + ' · Fatura' });
@@ -240,8 +254,8 @@ export function TransactionTemplatesPage({ data, revision, showValues, act }: Ex
     accountId: template.accountId, notes: template.notes,
   }), 'Movimentação criada a partir do modelo.');
   return <>
-    <Heading eyebrow="ÁREA PRIVADA · XOTA" title="Modelos de movimentação" description="Guarde contas e receitas frequentes com suas informações e registre-as novamente com um toque."/>
-    <Panel><div className="panel-header"><div><h3>Novo modelo</h3><p>Os modelos ficam salvos apenas neste navegador e nesta área protegida pelo código XOTA.</p></div><Bookmark size={19}/></div>
+    <Heading eyebrow="ORGANIZAÇÃO" title="Modelos de movimentação" description="Guarde contas e receitas frequentes com suas informações e registre-as novamente com um toque."/>
+    <Panel><div className="panel-header"><div><h3>Novo modelo</h3><p></p></div><Bookmark size={19}/></div>
       <div className="form-grid">
         {field('Nome do modelo', <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex.: Conta de internet"/>)}
         {field('Tipo', <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as 'income' | 'expense' })}><option value="expense">Saída</option><option value="income">Entrada</option></select>)}

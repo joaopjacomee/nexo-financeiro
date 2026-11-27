@@ -183,3 +183,5 @@
   .template-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}
   .template-actions{grid-column:1/-1;justify-content:flex-end}
 }
+
+.calendar-dot.card-due,.event-marker.card-due{background:#b453e6}
