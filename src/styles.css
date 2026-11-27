@@ -70,3 +70,13 @@
 .reserve-actions{margin-top:auto;padding-top:12px;gap:8px}
 .reserve-actions .btn{min-height:34px}
 @media(max-width:700px){.reserve-grid{grid-auto-rows:auto}.reserve-card{height:auto;padding:16px}.reserve-card h3{min-height:0}}
+
+
+/* Protected bulk JSON import panel */
+.json-import-panel{margin-bottom:14px}
+.json-import-panel h3{font:700 13px system-ui;margin:0 0 7px}
+.json-import-panel p{font-size:10px;color:#8e8598;line-height:1.55;margin:0 0 14px}
+.json-import-textarea{width:100%;min-height:180px;resize:vertical;border:1px solid #e9e3ef;border-radius:9px;padding:11px 12px;background:#fdfcff;color:#51455f;font:10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
+.json-import-textarea:focus{outline:none;border-color:#a78bfa;box-shadow:0 0 0 3px #f0eaff}
+.json-import-hint{display:block;margin-top:10px;color:#968da0;font-size:9px;line-height:1.5}
+@media(max-width:700px){.json-import-panel .settings-actions{align-items:stretch;flex-direction:column}.json-import-panel .settings-actions .btn{justify-content:center}}

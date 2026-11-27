@@ -193,6 +193,222 @@ export async function createCardPurchase(input: {
   });
 }
 
+
+/**
+ * Imports credit-card purchases from the compact JSON format used by Nexo.
+ * All rows are validated before one atomic IndexedDB transaction is opened.
+ */
+export async function importCardPurchasesFromJson(payload: unknown): Promise<{
+  importedCount: number; totalCents: number; cardName: string; firstDueMonth: string; debtorCount: number;
+}> {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('O JSON precisa ser um objeto com cartão e uma lista de compras.');
+  }
+  const data = payload as Record<string, unknown>;
+  const cardValue = typeof data.card === 'string' ? data.card.trim()
+    : typeof data.cardId === 'string' ? data.cardId.trim() : '';
+  if (!cardValue) throw new Error('Informe o cartão no campo "card".');
+
+  const normalize = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
+  const cards = await db.cards.toArray();
+  const card = cards.find((item) => item.id === cardValue || normalize(item.name) === normalize(cardValue));
+  if (!card) throw new Error('Cartão "' + cardValue + '" não está cadastrado neste NEXO.');
+
+  const validMonth = (value: unknown): value is string =>
+    typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+  const validDate = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(value + 'T00:00:00.000Z');
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  if (!validMonth(data.firstDueMonth)) throw new Error('Informe "firstDueMonth" no formato AAAA-MM.');
+  const rootMonth = data.firstDueMonth;
+  const rootCount = data.installmentsCount === undefined ? 1 : Number(data.installmentsCount);
+  if (!Number.isInteger(rootCount) || rootCount < 1 || rootCount > 240) {
+    throw new Error('"installmentsCount" precisa ser um número inteiro entre 1 e 240.');
+  }
+  if (!Array.isArray(data.purchases) || data.purchases.length === 0 || data.purchases.length > 500) {
+    throw new Error('O campo "purchases" precisa conter de 1 a 500 compras.');
+  }
+
+  const categories = await db.categories.toArray();
+  const existingDebtors = await db.debtors.toArray();
+  const personRecords = new Map<string, string>();
+  for (const debtor of existingDebtors) {
+    const key = normalize(debtor.person);
+    if (key && !personRecords.has(key)) personRecords.set(key, debtor.person.trim());
+  }
+
+  const entries = (data.purchases as unknown[]).map((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Compra ' + (index + 1) + ': item inválido.');
+    }
+    const row = raw as Record<string, unknown>;
+    const description = typeof row.description === 'string' ? row.description.trim() : '';
+    if (!description) throw new Error('Compra ' + (index + 1) + ': informe a descrição.');
+    const totalCents = Number(row.totalCents);
+    if (!Number.isSafeInteger(totalCents) || totalCents <= 0) {
+      throw new Error('Compra ' + (index + 1) + ' (' + description + '): "totalCents" precisa ser um inteiro positivo em centavos.');
+    }
+    if (!validDate(row.purchaseDate)) {
+      throw new Error('Compra ' + (index + 1) + ' (' + description + '): data inválida; use AAAA-MM-DD.');
+    }
+    const firstDueMonth = row.firstDueMonth === undefined ? rootMonth : row.firstDueMonth;
+    if (!validMonth(firstDueMonth)) {
+      throw new Error('Compra ' + (index + 1) + ' (' + description + '): primeira fatura inválida; use AAAA-MM.');
+    }
+    const installmentsCount = row.installmentsCount === undefined ? rootCount : Number(row.installmentsCount);
+    if (!Number.isInteger(installmentsCount) || installmentsCount < 1 || installmentsCount > 240) {
+      throw new Error('Compra ' + (index + 1) + ' (' + description + '): parcelas devem ser um inteiro entre 1 e 240.');
+    }
+
+    const rawCategory = typeof row.category === 'string' ? row.category.trim()
+      : typeof row.categoryName === 'string' ? row.categoryName.trim() : '';
+    const legacyDebtorCategory = normalize(rawCategory) === 'devedores';
+    let categoryId: string | undefined;
+    if (row.categoryId !== undefined && typeof row.categoryId === 'string') {
+      if (!categories.some((item) => item.id === row.categoryId)) {
+        throw new Error('Compra ' + (index + 1) + ' (' + description + '): categoria não encontrada.');
+      }
+      categoryId = row.categoryId;
+    } else if (rawCategory && !legacyDebtorCategory) {
+      const found = categories.find((item) => normalize(item.name) === normalize(rawCategory));
+      if (!found) throw new Error('Compra ' + (index + 1) + ' (' + description + '): categoria "' + rawCategory + '" não existe neste NEXO.');
+      categoryId = found.id;
+    }
+
+    const expenseClass = row.expenseClass;
+    if (expenseClass !== undefined && !['Investimento', 'Essencial', 'Supérfluo'].includes(String(expenseClass))) {
+      throw new Error('Compra ' + (index + 1) + ' (' + description + '): classe de despesa inválida.');
+    }
+    const notes = typeof row.notes === 'string' ? row.notes.trim() : undefined;
+    const rawShared = row.sharedWith;
+    const rawDebtor = row.debtor;
+    if (rawShared !== undefined && rawDebtor !== undefined) {
+      throw new Error('Compra ' + (index + 1) + ' (' + description + '): use "sharedWith" ou "debtor", não os dois.');
+    }
+
+    const readPersonAmount = (value: unknown, label: string, fullAmountAllowed: boolean) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Compra ' + (index + 1) + ' (' + description + '): "' + label + '" deve conter pessoa e valor em centavos.');
+      }
+      const personData = value as Record<string, unknown>;
+      const requestedPerson = typeof personData.person === 'string' ? personData.person.trim() : '';
+      const person = personRecords.get(normalize(requestedPerson));
+      if (!person) {
+        throw new Error('Compra ' + (index + 1) + ' (' + description + '): cadastre "' + (requestedPerson || 'a pessoa') + '" em Devedores antes de importar.');
+      }
+      const amountCents = personData.amountCents === undefined && fullAmountAllowed
+        ? totalCents : Number(personData.amountCents);
+      if (!Number.isSafeInteger(amountCents) || amountCents <= 0
+        || (fullAmountAllowed ? amountCents > totalCents : amountCents >= totalCents)) {
+        throw new Error('Compra ' + (index + 1) + ' (' + description + '): valor de "' + label + '" inválido.');
+      }
+      return { person, amountCents };
+    };
+
+    let sharedWith: { person: string; amountCents: number } | undefined;
+    let debtorDue: { person: string; amountCents: number } | undefined;
+    if (rawShared !== undefined) {
+      sharedWith = readPersonAmount(rawShared, 'sharedWith', false);
+    } else if (rawDebtor !== undefined) {
+      debtorDue = readPersonAmount(rawDebtor, 'debtor', true);
+    } else if (legacyDebtorCategory) {
+      // Supports the earlier JSON example: category "Devedores" plus a note
+      // like "Lançamento separado referente à Lê." records the full amount as owed.
+      const noteMatch = notes?.match(/referente\s+(?:à|a)\s+(.+?)[.!]?$/i);
+      const descriptionMatch = description.match(/\s-\s(.+)$/);
+      const inferredPerson = noteMatch?.[1]?.trim() || descriptionMatch?.[1]?.trim() || '';
+      debtorDue = readPersonAmount({ person: inferredPerson }, 'debtor', true);
+    }
+
+    return {
+      description, totalCents, purchaseDate: row.purchaseDate, firstDueMonth, installmentsCount,
+      categoryId, expenseClass: expenseClass as Transaction['expenseClass'] | undefined,
+      notes, sharedWith, debtorDue,
+    };
+  });
+
+  const totalCents = entries.reduce((sum, entry) => sum + entry.totalCents, 0);
+  const currentInstallments = await db.installments.where('cardId').equals(card.id).toArray();
+  const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+  if (card.limitCents > 0 && totalCents + currentCommitment > card.limitCents) {
+    throw new Error('A importação excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
+  }
+
+  // Deterministic IDs prevent importing the same JSON batch twice.
+  const signature = JSON.stringify({
+    cardId: card.id,
+    entries: entries.map((entry) => [
+      entry.description, entry.totalCents, entry.purchaseDate, entry.firstDueMonth, entry.installmentsCount,
+      entry.categoryId ?? '', entry.expenseClass ?? '', entry.notes ?? '',
+      entry.sharedWith?.person ?? '', entry.sharedWith?.amountCents ?? 0,
+      entry.debtorDue?.person ?? '', entry.debtorDue?.amountCents ?? 0,
+    ]),
+  });
+  let hash = 2166136261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const fingerprint = (hash >>> 0).toString(36);
+  const createdAt = new Date().toISOString();
+  const purchaseRows = entries.map((entry, index) => ({
+    id: 'json-' + fingerprint + '-' + (index + 1),
+    description: entry.description, totalCents: entry.totalCents, cardId: card.id,
+    categoryId: entry.categoryId, expenseClass: entry.expenseClass,
+    purchaseDate: entry.purchaseDate, firstDueMonth: entry.firstDueMonth,
+    installmentsCount: entry.installmentsCount, createdAt, notes: entry.notes,
+  }));
+  const existing = await db.purchases.bulkGet(purchaseRows.map((item) => item.id));
+  if (existing.some(Boolean)) {
+    throw new Error('Este JSON já foi importado (ou contém compras já importadas). Nenhum registro foi alterado.');
+  }
+
+  const installmentRows = entries.flatMap((entry, index) => {
+    const amounts = splitInstallmentCents(entry.totalCents, entry.installmentsCount);
+    return amounts.map((amountCents, installmentIndex) => {
+      const dueMonth = monthOffset(entry.firstDueMonth, installmentIndex);
+      const day = Math.min(card.dueDay, daysInMonth(dueMonth));
+      return {
+        id: 'json-' + fingerprint + '-i-' + (index + 1) + '-' + (installmentIndex + 1),
+        purchaseId: purchaseRows[index].id, cardId: card.id,
+        number: installmentIndex + 1, count: entry.installmentsCount,
+        amountCents, paidCents: 0, dueMonth,
+        dueDate: dueMonth + '-' + String(day).padStart(2, '0'),
+      };
+    });
+  });
+  const debtorRows = entries.flatMap((entry, index) => {
+    const amount = entry.sharedWith ?? entry.debtorDue;
+    if (!amount) return [];
+    return [{
+      id: 'json-' + fingerprint + '-d-' + (index + 1),
+      person: amount.person,
+      description: entry.sharedWith
+        ? 'Divisão da conta: ' + entry.description
+        : 'Compra para ' + amount.person + ': ' + entry.description,
+      originalCents: amount.amountCents, originDate: entry.purchaseDate,
+      categoryId: entry.categoryId, originalPayment: 'Cartão de crédito',
+      notes: entry.notes, sharedPurchaseId: purchaseRows[index].id, createdAt,
+    }];
+  });
+  const months = [...new Set(installmentRows.map((item) => item.dueMonth))]
+    .map((month) => ({ id: month, month, createdAt }));
+
+  await db.transaction('rw', db.purchases, db.installments, db.months, db.debtors, async () => {
+    await db.purchases.bulkAdd(purchaseRows);
+    await db.installments.bulkAdd(installmentRows);
+    await db.months.bulkPut(months);
+    if (debtorRows.length) await db.debtors.bulkAdd(debtorRows);
+  });
+
+  return {
+    importedCount: purchaseRows.length, totalCents, cardName: card.name,
+    firstDueMonth: entries[0].firstDueMonth, debtorCount: debtorRows.length,
+  };
+}
+
 export async function payInvoice(input: { cardId: string; accountId: string; month: string; amountCents: number; date: string }) {
   if (input.month < FINANCIAL_START_MONTH || input.date < `${FINANCIAL_START_MONTH}-01`) throw new Error('O controle de faturas começa em dezembro de 2026.');
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor de pagamento válido.');

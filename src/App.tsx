@@ -18,7 +18,7 @@ import {
   clearTestData, createCardPurchase, createDebtor, createTransfer, createWishlistPurchase, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
   deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve, saveReserveClosing,
-  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance,
+  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importCardPurchasesFromJson,
 } from './lib/operations';
 import type {
   Account,
@@ -917,6 +917,7 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
   const [message, setMessage] = useState('');
   const [accessCode, setAccessCode] = useState('');
   const [password, setPassword] = useState('');
+  const [purchaseImportJson, setPurchaseImportJson] = useState('');
   const exportFile = async (encrypted: boolean) => {
     try {
       const payload = await exportBackup();
@@ -946,12 +947,43 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
     setAccessCode('');
     setMessage('Áreas privadas desbloqueadas neste navegador.');
   };
+  const importPurchasesJson = async () => {
+    let payload: unknown;
+    try { payload = JSON.parse(purchaseImportJson); }
+    catch { setMessage('JSON inválido. Confira a sintaxe antes de importar.'); return; }
+    let summary: Awaited<ReturnType<typeof importCardPurchasesFromJson>> | undefined;
+    const ok = await act(async () => { summary = await importCardPurchasesFromJson(payload); }, 'Compras importadas com sucesso.');
+    if (ok && summary) {
+      setMessage(summary.importedCount + ' compras importadas para ' + summary.cardName + ', total de ' + money(summary.totalCents) + '. ' + summary.debtorCount + ' valores a receber foram vinculados.');
+      setPurchaseImportJson('');
+    }
+  };
+  const loadPurchaseJsonFile = async (file?: File) => {
+    if (!file) return;
+    try {
+      setPurchaseImportJson(await file.text());
+      setMessage('JSON carregado. Confira o conteúdo e clique em Importar compras.');
+    } catch { setMessage('Não foi possível ler o arquivo JSON.'); }
+  };
   return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/>
     <Panel>
       {privateSectionsUnlocked
         ? <div className="settings-actions"><span className="status-pill status-received">Ativado</span><Button variant="secondary" onClick={() => { onUnlockPrivateSections(false); setMessage('Bloqueado.'); }}>Bloquear</Button></div>
         : <div className="settings-actions"><Field label="CODIGO"><input type="password" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }} autoComplete="off" placeholder="CODIGO" maxLength={32}/></Field><Button onClick={submitAccessCode} disabled={!accessCode.trim()}>Ativar</Button></div>}
     </Panel>
+    {privateSectionsUnlocked && <Panel className="json-import-panel">
+      <div className="settings-icon purple"><Upload size={20}/></div>
+      <h3>Importar compras por JSON</h3>
+      <p>Importe várias compras no cartão de uma só vez. O sistema valida cartão, categorias, datas, valores e pessoas antes de gravar os dados.</p>
+      <Field label="Conteúdo JSON">
+        <textarea className="json-import-textarea" rows={9} value={purchaseImportJson} onChange={(event) => setPurchaseImportJson(event.target.value)} placeholder={'Cole aqui o JSON com "card", "firstDueMonth" e "purchases".'}/>
+      </Field>
+      <div className="settings-actions">
+        <label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(event) => { void loadPurchaseJsonFile(event.target.files?.[0]); event.currentTarget.value = ''; }}/></label>
+        <Button onClick={() => void importPurchasesJson()} disabled={!purchaseImportJson.trim()}>Importar compras</Button>
+      </div>
+      <small className="json-import-hint">Disponível somente enquanto as áreas privadas estiverem desbloqueadas com o código. A mesma importação não será duplicada.</small>
+    </Panel>}
     <div className="settings-grid"><Panel><div className="settings-icon purple"><Download size={20}/></div><h3>Backup dos dados</h3><p>Exporte suas informações em JSON para guardar uma cópia completa das contas, movimentações, cartões, parcelas, devedores, reservas e CDI.</p><div className="settings-actions"><Button onClick={() => void exportFile(false)}><Download size={15}/> Exportar JSON</Button></div></Panel><Panel><div className="settings-icon green"><ShieldCheck size={20}/></div><h3>Backup criptografado</h3><p>Use uma senha para proteger o arquivo com AES-GCM e derivação de chave PBKDF2. A senha não é salva pelo Nexo.</p><Field label="Senha (mínimo 8 caracteres)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Defina uma senha forte"/></Field><div className="settings-actions"><Button variant="secondary" onClick={() => void exportFile(true)} disabled={password.length < 8}>Exportar criptografado</Button></div></Panel><Panel><div className="settings-icon lavender"><Upload size={20}/></div><h3>Restaurar backup</h3><p>Importe um JSON exportado pelo Nexo. A restauração mescla registros e evita duplicatas por identificador.</p><Field label="Senha do backup criptografado (se aplicável)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)}/></Field><label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(e) => void importFile(e.target.files?.[0])}/></label></Panel><Panel><div className="settings-icon pink"><Smartphone size={20}/></div><h3>Privacidade e armazenamento</h3><p>Seus dados ficam no IndexedDB deste navegador e não são enviados para um servidor. O armazenamento local não é automaticamente criptografado.</p><ul className="settings-list"><li>Não armazene senhas bancárias ou números completos de cartões.</li><li>Limpar os dados do navegador pode apagar suas informações.</li><li>Faça backups periódicos e guarde uma cópia fora do dispositivo.</li><li>O modo offline depende do primeiro carregamento completo da aplicação.</li></ul></Panel></div><Panel><div className="settings-icon pink"><Trash2 size={20}/></div><h3>Apagar dados de teste</h3><p>Remove os registros deste navegador e recria apenas os cadastros iniciais vazios. Faça um backup antes, caso queira conservar alguma informação.</p><div className="settings-actions"><Button variant="danger" onClick={() => { void act(() => clearTestData(), 'Os dados de teste foram apagados e os cadastros vazios foram recriados.'); }}>Apagar todos os dados</Button></div></Panel>{message && <div className="info-note"><Check size={17}/><span>{message}</span><button className="icon-button mini" onClick={() => setMessage('')}><X size={14}/></button></div>}<Panel className="about-panel"><PanelHeader title="Sobre o Nexo"/><div className="about-grid"><div><span>Versão</span><strong>1.0.0</strong></div><div><span>Banco de dados</span><strong>IndexedDB · Dexie.js</strong></div><div><span>Hospedagem</span><strong>GitHub Pages</strong></div><div><span>Arquitetura</span><strong>100% navegador</strong></div></div></Panel></>;
 }
 function downloadFile(content: string, filename: string, mime: string) { const blob = new Blob([content], { type: mime }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
