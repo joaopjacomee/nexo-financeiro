@@ -108,7 +108,7 @@ export async function getPatrimony() {
     impactCents: item.date >= `${FINANCIAL_START_MONTH}-01` ? item.availableBalanceImpactCents ?? 0 : 0,
   })));
   // Caixinhas são uma parte do dinheiro já existente nas contas; entram no patrimônio uma única vez.
-  return { cash, receivable, cardCommitments, reserved, netWorth: cash + receivable - cardCommitments, freeCash };
+  return { cash, receivable, cardCommitments, reserved, netWorth: cash - cardCommitments, freeCash };
 }
 
 export async function getCategorySpend(month: string) {
