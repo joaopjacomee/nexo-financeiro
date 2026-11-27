@@ -61,7 +61,7 @@ class NexoDatabase extends Dexie {
 export const db = new NexoDatabase();
 
 const defaultCategoryNames = [
-  'Alimentação', 'Assinaturas', 'Beleza', 'Contas', 'Devedores', 'Diversos', 'Doação', 'Educação',
+  'Alimentação', 'Assinaturas', 'Beleza', 'Contas', 'Diversos', 'Doação', 'Educação',
   'Entretenimento', 'Investimentos', 'Lazer', 'Moradia', 'Pets', 'Presentes', 'Roupas', 'Saúde',
   'Trabalho', 'Transporte', 'Viagens',
 ];
@@ -73,6 +73,17 @@ export async function initializeDatabase() {
     await db.categories.bulkPut(defaultCategoryNames.map((name, index) => ({
       id: `default-category-${index + 1}`, name, color: ['#7c3aed', '#a78bfa', '#c4b5fd'][index % 3], icon: 'circle', sortOrder: index,
     })));
+  }
+  // Remove the old built-in "Devedores" category without touching custom categories.
+  const legacyDebtorCategory = await db.categories.get('default-category-5');
+  if (legacyDebtorCategory?.name === 'Devedores') {
+    await db.transaction('rw', db.categories, db.transactions, db.purchases, db.debtors, db.monthlyBudgets, async () => {
+      await db.transactions.where('categoryId').equals(legacyDebtorCategory.id).modify({ categoryId: undefined });
+      await db.purchases.where('categoryId').equals(legacyDebtorCategory.id).modify({ categoryId: undefined });
+      await db.debtors.where('categoryId').equals(legacyDebtorCategory.id).modify({ categoryId: undefined });
+      await db.monthlyBudgets.where('categoryId').equals(legacyDebtorCategory.id).delete();
+      await db.categories.delete(legacyDebtorCategory.id);
+    });
   }
   const accountCount = await db.accounts.count();
   if (accountCount === 0) {
