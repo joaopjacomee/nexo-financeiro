@@ -1049,12 +1049,70 @@ function WishlistPage({ showValues, revision, act }: CommonProps) {
 function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProps) {
   const [spend, setSpend] = useState<Awaited<ReturnType<typeof getCategorySpend>>>([]);
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof getMonthSummary>> | null>(null);
-  useEffect(() => { Promise.all([getCategorySpend(month), getMonthSummary(month)]).then(([s, v]) => { setSpend(s); setSummary(v); }); }, [month, revision]);
+  const [classificationTotals, setClassificationTotals] = useState({ Investimento: 0, Essencial: 0, 'Supérfluo': 0 });
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      getCategorySpend(month),
+      getMonthSummary(month),
+      db.transactions.where('month').equals(month).toArray(),
+      db.installments.where('dueMonth').equals(month).toArray(),
+      db.purchases.toArray(),
+    ]).then(([categorySpend, monthSummary, transactions, installments, purchases]) => {
+      if (!active) return;
+      setSpend(categorySpend);
+      setSummary(monthSummary);
+
+      const totals = { Investimento: 0, Essencial: 0, 'Supérfluo': 0 };
+      for (const transaction of transactions) {
+        if (transaction.type !== 'expense' || transaction.status === 'cancelled' || !isExpenseInAccountingPeriod(transaction.date)) continue;
+        const classification = transaction.expenseClass ?? 'Essencial';
+        totals[classification] += transaction.amountCents;
+      }
+      if (isMonthInAccountingPeriod(month)) {
+        const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
+        for (const installment of installments) {
+          const purchase = purchaseById.get(installment.purchaseId);
+          const classification = purchase?.expenseClass ?? 'Essencial';
+          totals[classification] += installment.amountCents;
+        }
+      }
+      setClassificationTotals(totals);
+    }).catch((error) => console.error('Não foi possível carregar o resumo por classificação.', error));
+    return () => { active = false; };
+  }, [month, revision]);
   const chartData = spend.map((item) => ({ name: item.category.name, gasto: item.spentCents / 100 }));
   const categoryTotalCents = spend.reduce((sum, item) => sum + item.spentCents, 0);
-  return <><PageHeading eyebrow="INTELIGÊNCIA FINANCEIRA" title="Relatórios e análises" description="Entenda seus gastos, compare o planejado e identifique tendências." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><Button size="small" variant="secondary" onClick={() => downloadReportCsv(month, spend)}><Download size={14}/> CSV</Button><Button size="small" variant="secondary" onClick={() => downloadReportExcel(month, spend)}><FileText size={14}/> Excel</Button><Button size="small" variant="secondary" onClick={() => window.print()}>PDF / Imprimir</Button></div>}/><div className="stat-grid stat-grid-three"><StatCard label="Receitas" value={money(summary?.incomeCents ?? 0)} icon={TrendingUp} tone="green" hidden={!showValues}/><StatCard label="Despesas e parcelas" value={money((summary?.cashExpensesCents ?? 0) + (summary?.installmentsCents ?? 0))} icon={TrendingDown} tone="pink" hidden={!showValues}/><StatCard label="Saldo projetado" value={money(summary?.freeCents ?? 0)} icon={Wallet} hidden={!showValues}/></div><div className="dashboard-grid"><Panel><PanelHeader title="Despesas por categoria" subtitle={monthBR(month)}/>{chartData.length ? <ResponsiveContainer width="100%" height={320}><BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 22, bottom: 4, left: 24 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0eafa"/><XAxis type="number" tick={{ fontSize: 11, fill: '#8f879d' }} axisLine={false} tickLine={false}/><YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 11, fill: '#827b91' }} axisLine={false} tickLine={false}/><Tooltip formatter={(v) => money(Number(v) * 100)}/><Bar dataKey="gasto" fill="#8b5cf6" radius={[0, 6, 6, 0]}/></BarChart></ResponsiveContainer> : <EmptyState title="Sem dados suficientes" text="Registre despesas para preencher este relatório."/>}</Panel><Panel><PanelHeader title="Resumo por categoria" subtitle="Valores contabilizados no mês"/><div className="category-report-list">{spend.map((item, index) => <div className="category-report-row" key={item.category.id}><span className="category-dot" style={{ background: item.category.color }}/><span>{item.category.name}</span><strong>{showValues ? money(item.spentCents) : '••••'}</strong><small>{categoryTotalCents ? `${Math.round(item.spentCents / categoryTotalCents * 100)}%` : '—'}</small></div>)}</div></Panel></div><div className="info-note"><FileText size={17}/><span>Os valores de despesas por categoria somam registros à vista e parcelas de crédito no mês. Exporte este resumo em CSV ou Excel, ou use a impressão do navegador para salvar em PDF.</span></div></>;
+  const classRows = [
+    { name: 'Investimento', amountCents: classificationTotals.Investimento, color: '#8b5cf6' },
+    { name: 'Essencial', amountCents: classificationTotals.Essencial, color: '#18a878' },
+    { name: 'Supérfluo', amountCents: classificationTotals['Supérfluo'], color: '#df8b45' },
+  ];
+  const classificationTotalCents = classRows.reduce((sum, item) => sum + item.amountCents, 0);
+  return <>
+    <PageHeading eyebrow="INTELIGÊNCIA FINANCEIRA" title="Relatórios e análises" description="Entenda seus gastos, compare o planejado e identifique tendências." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><Button size="small" variant="secondary" onClick={() => downloadReportCsv(month, spend)}><Download size={14}/> CSV</Button><Button size="small" variant="secondary" onClick={() => downloadReportExcel(month, spend)}><FileText size={14}/> Excel</Button><Button size="small" variant="secondary" onClick={() => window.print()}>PDF / Imprimir</Button></div>}/>
+    <div className="stat-grid stat-grid-three"><StatCard label="Receitas" value={money(summary?.incomeCents ?? 0)} icon={TrendingUp} tone="green" hidden={!showValues}/><StatCard label="Despesas e parcelas" value={money((summary?.cashExpensesCents ?? 0) + (summary?.installmentsCents ?? 0))} icon={TrendingDown} tone="pink" hidden={!showValues}/><StatCard label="Saldo projetado" value={money(summary?.freeCents ?? 0)} icon={Wallet} hidden={!showValues}/></div>
+    <Panel className="classification-report-panel">
+      <PanelHeader title="Despesas por classificação" subtitle={monthBR(month) + ' · valores à vista e parcelas de crédito'}/>
+      <div className="classification-report-list">
+        {classRows.map((item) => {
+          const percentage = classificationTotalCents ? Math.round(item.amountCents / classificationTotalCents * 100) : 0;
+          return <div className="classification-report-row" key={item.name}>
+            <div className="classification-report-heading">
+              <span><i style={{ background: item.color }}/><strong>{item.name}</strong></span>
+              <strong>{showValues ? money(item.amountCents) : '••••'}</strong>
+            </div>
+            <div className="classification-report-track"><i style={{ width: showValues ? percentage + '%' : '0%', background: item.color }}/></div>
+            <small>{showValues ? percentage + '% do total de despesas' : 'Percentual oculto'}</small>
+          </div>;
+        })}
+      </div>
+      <div className="classification-report-total"><span>Total classificado</span><strong>{showValues ? money(classificationTotalCents) : '••••'}</strong></div>
+    </Panel>
+    <div className="dashboard-grid"><Panel><PanelHeader title="Despesas por categoria" subtitle={monthBR(month)}/>{chartData.length ? <ResponsiveContainer width="100%" height={320}><BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 22, bottom: 4, left: 24 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0eafa"/><XAxis type="number" tick={{ fontSize: 11, fill: '#8f879d' }} axisLine={false} tickLine={false}/><YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 11, fill: '#827b91' }} axisLine={false} tickLine={false}/><Tooltip formatter={(v) => money(Number(v) * 100)}/><Bar dataKey="gasto" fill="#8b5cf6" radius={[0, 6, 6, 0]}/></BarChart></ResponsiveContainer> : <EmptyState title="Sem dados suficientes" text="Registre despesas para preencher este relatório."/>}</Panel><Panel><PanelHeader title="Resumo por categoria" subtitle="Valores contabilizados no mês"/><div className="category-report-list">{spend.map((item, index) => <div className="category-report-row" key={item.category.id}><span className="category-dot" style={{ background: item.category.color }}/><span>{item.category.name}</span><strong>{showValues ? money(item.spentCents) : '••••'}</strong><small>{categoryTotalCents ? Math.round(item.spentCents / categoryTotalCents * 100) + '%' : '—'}</small></div>)}</div></Panel></div>
+    <div className="info-note"><FileText size={17}/><span>Os valores por classificação consideram despesas não canceladas e parcelas de crédito do mês selecionado. Cada parcela herda a classificação definida na compra. Os valores por categoria somam registros à vista e parcelas de crédito. Exporte o resumo por categoria em CSV ou Excel, ou use a impressão do navegador para salvar em PDF.</span></div>
+  </>;
 }
-
 function ForecastPage({ data, month, setMonth, showValues, revision }: CommonProps) {
   const [rows, setRows] = useState<Array<{ month: string; income: number; expense: number; installments: number; reserves: number; monthlyFree: number; balance: number }>>([]);
   useEffect(() => {
