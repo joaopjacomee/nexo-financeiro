@@ -587,8 +587,8 @@ export async function deleteAccount(accountId: string) {
   // the account undeleted when a related record was present.
   await db.transaction(
     'rw',
-    db.accounts, db.transactions, db.transfers, db.invoicePayments, db.installments,
-    db.debtors, db.debtorPayments, db.investmentMovements, db.investments,
+    [db.accounts, db.transactions, db.transfers, db.invoicePayments, db.installments,
+      db.debtors, db.debtorPayments, db.investmentMovements, db.investments],
     async () => {
       const account = await db.accounts.get(accountId);
       if (!account) return;
