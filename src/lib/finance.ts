@@ -93,10 +93,11 @@ export async function getDebtorMetrics() {
 }
 
 export async function getPatrimony() {
-  const [balances, cardMetrics, debtorMetrics, reserves, reserveMovements] = await Promise.all([
-    getAccountBalances(), getCardMetrics(), getDebtorMetrics(), getReserveBalances(), db.reserveMovements.toArray(),
+  const [balances, cardMetrics, debtorMetrics, reserves, reserveMovements, transactions] = await Promise.all([
+    getAccountBalances(), getCardMetrics(), getDebtorMetrics(), getReserveBalances(), db.reserveMovements.toArray(), db.transactions.toArray(),
   ]);
-  const cash = balances.reduce((sum, item) => sum + item.balanceCents, 0);
+  const reservePlanExpenses = transactions.filter((tx) => tx.paymentMode === 'reserve-plans' && tx.type === 'expense' && tx.status === 'paid' && isExpenseInAccountingPeriod(tx.date)).reduce((sum, tx) => sum + tx.amountCents, 0);
+  const cash = balances.reduce((sum, item) => sum + item.balanceCents, 0) - reservePlanExpenses;
   const receivable = debtorMetrics.reduce((sum, item) => sum + item.remainingCents, 0);
   const cardCommitments = cardMetrics.reduce((sum, item) => sum + item.usedCents, 0);
   const reserved = reserves.reduce((sum, item) => sum + item.balanceCents, 0);
@@ -106,8 +107,8 @@ export async function getPatrimony() {
     reserveId: item.reserveId,
     impactCents: item.date >= `${FINANCIAL_START_MONTH}-01` ? item.availableBalanceImpactCents ?? 0 : 0,
   })));
-  // Caixinhas fazem parte do patrimônio líquido e são somadas separadamente.
-  return { cash, receivable, cardCommitments, reserved, netWorth: cash + reserved + receivable - cardCommitments, freeCash };
+  // Caixinhas são uma parte do dinheiro já existente nas contas; entram no patrimônio uma única vez.
+  return { cash, receivable, cardCommitments, reserved, netWorth: cash + receivable - cardCommitments, freeCash };
 }
 
 export async function getCategorySpend(month: string) {
