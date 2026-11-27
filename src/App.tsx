@@ -97,8 +97,16 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [privacyNotice, setPrivacyNotice] = useState(false);
   const [privateSectionsUnlocked, setPrivateSectionsUnlocked] = useState(() => {
-    try { return window.sessionStorage.getItem(PRIVATE_SECTIONS_SESSION_KEY) === 'true'; }
-    catch { return false; }
+    try {
+      if (window.localStorage.getItem(PRIVATE_SECTIONS_SESSION_KEY) === 'true') return true;
+      // Migrate an unlock from the previous tab-only storage to persistent browser storage.
+      if (window.sessionStorage.getItem(PRIVATE_SECTIONS_SESSION_KEY) === 'true') {
+        window.localStorage.setItem(PRIVATE_SECTIONS_SESSION_KEY, 'true');
+        window.sessionStorage.removeItem(PRIVATE_SECTIONS_SESSION_KEY);
+        return true;
+      }
+      return false;
+    } catch { return false; }
   });
   const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null);
   const [query, setQuery] = useState('');
@@ -211,8 +219,9 @@ export default function App() {
   };
   const updatePrivateSectionsAccess = (enabled: boolean) => {
     try {
-      if (enabled) window.sessionStorage.setItem(PRIVATE_SECTIONS_SESSION_KEY, 'true');
-      else window.sessionStorage.removeItem(PRIVATE_SECTIONS_SESSION_KEY);
+      if (enabled) window.localStorage.setItem(PRIVATE_SECTIONS_SESSION_KEY, 'true');
+      else window.localStorage.removeItem(PRIVATE_SECTIONS_SESSION_KEY);
+      window.sessionStorage.removeItem(PRIVATE_SECTIONS_SESSION_KEY);
     } catch { /* The in-memory access state still works for this open page. */ }
     setPrivateSectionsUnlocked(enabled);
     if (!enabled && (page === 'debtors' || page === 'wishlist')) setPage('dashboard');
@@ -860,7 +869,7 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
     }
     onUnlockPrivateSections(true);
     setAccessCode('');
-    setMessage('Áreas privadas desbloqueadas nesta aba do navegador.');
+    setMessage('Áreas privadas desbloqueadas neste navegador.');
   };
   return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/>
     <Panel>
