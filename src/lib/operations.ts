@@ -228,22 +228,38 @@ export async function createCardPurchase(input: {
   return purchase;
 }
 
-export async function importCardPurchasesFromJson(payload: unknown): Promise<{
-  importedCount: number; totalCents: number; cardName: string; firstDueMonth: string; debtorCount: number;
+export async function importPurchasesFromJson(payload: unknown): Promise<{
+  importedCount: number;
+  totalCents: number;
+  debtorCount: number;
+  paymentModeCounts: Record<string, number>;
 }> {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('O JSON precisa ser um objeto com cartão e uma lista de compras.');
+    throw new Error('O JSON precisa ser um objeto com uma lista "purchases" ou "transactions".');
   }
   const data = payload as Record<string, unknown>;
-  const cardValue = typeof data.card === 'string' ? data.card.trim()
-    : typeof data.cardId === 'string' ? data.cardId.trim() : '';
-  if (!cardValue) throw new Error('Informe o cartão no campo "card".');
+  const rawRows = Array.isArray(data.purchases) ? data.purchases : data.transactions;
+  if (!Array.isArray(rawRows) || rawRows.length === 0 || rawRows.length > 500) {
+    throw new Error('O campo "purchases" ou "transactions" precisa conter de 1 a 500 registros.');
+  }
 
   const normalize = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
-  const cards = await db.cards.toArray();
-  const card = cards.find((item) => item.id === cardValue || normalize(item.name) === normalize(cardValue));
-  if (!card) throw new Error('Cartão "' + cardValue + '" não está cadastrado neste NEXO.');
-
+  const normalizeMode = (value: unknown): Transaction['paymentMode'] | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const key = normalize(value);
+    const aliases: Record<string, Transaction['paymentMode']> = {
+      pix: 'pix', dinheiro: 'cash', cash: 'cash',
+      'cartão de débito': 'card-debit', 'cartao de debito': 'card-debit', 'card-debit': 'card-debit', debit: 'card-debit',
+      'cartão de crédito': 'card-credit', 'cartao de credito': 'card-credit', 'card-credit': 'card-credit', credit: 'card-credit',
+      outro: 'other', other: 'other',
+      'reserva de planos': 'reserve-plans', 'reserve-plans': 'reserve-plans', planos: 'reserve-plans',
+    };
+    return aliases[key];
+  };
+  const modeLabel = (mode: Transaction['paymentMode']) => ({
+    pix: 'Pix', cash: 'Dinheiro', 'card-debit': 'Cartão de débito',
+    'card-credit': 'Cartão de crédito', other: 'Outro', 'reserve-plans': 'Reserva de planos',
+  }[mode]);
   const validMonth = (value: unknown): value is string =>
     typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
   const validDate = (value: unknown): value is string => {
@@ -251,194 +267,348 @@ export async function importCardPurchasesFromJson(payload: unknown): Promise<{
     const parsed = new Date(value + 'T00:00:00.000Z');
     return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   };
-  if (!validMonth(data.firstDueMonth)) throw new Error('Informe "firstDueMonth" no formato AAAA-MM.');
-  const rootMonth = data.firstDueMonth;
-  const rootCount = data.installmentsCount === undefined ? 1 : Number(data.installmentsCount);
-  if (!Number.isInteger(rootCount) || rootCount < 1 || rootCount > 240) {
-    throw new Error('"installmentsCount" precisa ser um número inteiro entre 1 e 240.');
-  }
-  if (!Array.isArray(data.purchases) || data.purchases.length === 0 || data.purchases.length > 500) {
-    throw new Error('O campo "purchases" precisa conter de 1 a 500 compras.');
-  }
+  const addMonth = (date: string) => {
+    const [year, month] = date.slice(0, 7).split('-').map(Number);
+    const next = new Date(year, month, 1);
+    return next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0');
+  };
 
-  const categories = await db.categories.toArray();
-  const existingDebtors = await db.debtors.toArray();
-  const personRecords = new Map<string, string>();
-  for (const debtor of existingDebtors) {
-    const key = normalize(debtor.person);
-    if (key && !personRecords.has(key)) personRecords.set(key, debtor.person.trim());
-  }
-
-  const entries = (data.purchases as unknown[]).map((raw, index) => {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw new Error('Compra ' + (index + 1) + ': item inválido.');
-    }
-    const row = raw as Record<string, unknown>;
-    const description = typeof row.description === 'string' ? row.description.trim() : '';
-    if (!description) throw new Error('Compra ' + (index + 1) + ': informe a descrição.');
-    const totalCents = Number(row.totalCents);
-    if (!Number.isSafeInteger(totalCents) || totalCents <= 0) {
-      throw new Error('Compra ' + (index + 1) + ' (' + description + '): "totalCents" precisa ser um inteiro positivo em centavos.');
-    }
-    if (!validDate(row.purchaseDate)) {
-      throw new Error('Compra ' + (index + 1) + ' (' + description + '): data inválida; use AAAA-MM-DD.');
-    }
-    const firstDueMonth = row.firstDueMonth === undefined ? rootMonth : row.firstDueMonth;
-    if (!validMonth(firstDueMonth)) {
-      throw new Error('Compra ' + (index + 1) + ' (' + description + '): primeira fatura inválida; use AAAA-MM.');
-    }
-    const installmentsCount = row.installmentsCount === undefined ? rootCount : Number(row.installmentsCount);
-    if (!Number.isInteger(installmentsCount) || installmentsCount < 1 || installmentsCount > 240) {
-      throw new Error('Compra ' + (index + 1) + ' (' + description + '): parcelas devem ser um inteiro entre 1 e 240.');
-    }
-
+  const [categories, accounts, cards, existingDebtors] = await Promise.all([
+    db.categories.toArray(), db.accounts.toArray(), db.cards.toArray(), db.debtors.toArray(),
+  ]);
+  const resolveCategory = (row: Record<string, unknown>, index: number, description: string) => {
     const rawCategory = typeof row.category === 'string' ? row.category.trim()
       : typeof row.categoryName === 'string' ? row.categoryName.trim() : '';
     const legacyDebtorCategory = normalize(rawCategory) === 'devedores';
     let categoryId: string | undefined;
     if (row.categoryId !== undefined && typeof row.categoryId === 'string') {
       if (!categories.some((item) => item.id === row.categoryId)) {
-        throw new Error('Compra ' + (index + 1) + ' (' + description + '): categoria não encontrada.');
+        throw new Error('Registro ' + (index + 1) + ' (' + description + '): categoria não encontrada.');
       }
       categoryId = row.categoryId;
     } else if (rawCategory && !legacyDebtorCategory) {
       const found = categories.find((item) => normalize(item.name) === normalize(rawCategory));
-      if (!found) throw new Error('Compra ' + (index + 1) + ' (' + description + '): categoria "' + rawCategory + '" não existe neste NEXO.');
+      if (!found) throw new Error('Registro ' + (index + 1) + ' (' + description + '): categoria "' + rawCategory + '" não existe neste NEXO.');
       categoryId = found.id;
     }
+    return { categoryId, legacyDebtorCategory };
+  };
 
+  const rootMode = normalizeMode(data.paymentMode);
+  if (data.paymentMode !== undefined && !rootMode) {
+    throw new Error('Forma de pagamento padrão inválida. Use pix, cash, card-debit, card-credit, other ou reserve-plans.');
+  }
+  const rootCardValue = typeof data.card === 'string' ? data.card.trim()
+    : typeof data.cardId === 'string' ? data.cardId.trim() : '';
+  const legacyCreditBatch = Boolean(rootCardValue) && !data.paymentMode;
+  const rootAccountValue = typeof data.account === 'string' ? data.account.trim()
+    : typeof data.accountId === 'string' ? data.accountId.trim()
+      : typeof data.accountName === 'string' ? data.accountName.trim() : '';
+  const rootCount = data.installmentsCount === undefined ? 1 : Number(data.installmentsCount);
+  if (!Number.isInteger(rootCount) || rootCount < 1 || rootCount > 240) {
+    throw new Error('"installmentsCount" precisa ser um número inteiro entre 1 e 240.');
+  }
+
+  const entries = (rawRows as unknown[]).map((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Registro ' + (index + 1) + ': item inválido.');
+    }
+    const row = raw as Record<string, unknown>;
+    const description = typeof row.description === 'string' ? row.description.trim() : '';
+    if (!description) throw new Error('Registro ' + (index + 1) + ': informe a descrição.');
+    const totalCents = Number(row.totalCents ?? row.amountCents);
+    if (!Number.isSafeInteger(totalCents) || totalCents <= 0) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): "totalCents" precisa ser um inteiro positivo em centavos.');
+    }
+    const purchaseDate = row.purchaseDate ?? row.date;
+    if (!validDate(purchaseDate)) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): data inválida; use AAAA-MM-DD.');
+    }
+    const mode = normalizeMode(row.paymentMode) ?? rootMode ?? (legacyCreditBatch ? 'card-credit' : undefined);
+    if (!mode) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): informe "paymentMode" no item ou no objeto principal do JSON.');
+    }
+    if (row.paymentMode !== undefined && !normalizeMode(row.paymentMode)) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): forma de pagamento inválida.');
+    }
+    const typeValue = typeof row.type === 'string' ? normalize(row.type) : 'expense';
+    const type: Transaction['type'] = ['income', 'receita'].includes(typeValue) ? 'income' : 'expense';
+    if (!['income', 'receita', 'expense', 'despesa', ''].includes(typeValue)) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): tipo deve ser "expense" ou "income".');
+    }
+    if (type === 'income' && (mode === 'card-credit' || mode === 'reserve-plans')) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): receita não pode usar crédito nem Reserva de planos.');
+    }
+    if (type === 'income' && (row.sharedWith !== undefined || row.debtor !== undefined)) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): receitas não podem ter pessoas vinculadas como devedoras.');
+    }
+    if (mode === 'reserve-plans' && type !== 'expense') {
+      throw new Error('Reserva de planos só pode ser usada em despesas.');
+    }
+
+    const { categoryId, legacyDebtorCategory } = resolveCategory(row, index, description);
     const expenseClass = row.expenseClass;
     if (expenseClass !== undefined && !['Investimento', 'Essencial', 'Supérfluo'].includes(String(expenseClass))) {
-      throw new Error('Compra ' + (index + 1) + ' (' + description + '): classe de despesa inválida.');
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): classe de despesa inválida.');
     }
     const notes = typeof row.notes === 'string' ? row.notes.trim() : undefined;
     const rawShared = row.sharedWith;
     const rawDebtor = row.debtor;
     if (rawShared !== undefined && rawDebtor !== undefined) {
-      throw new Error('Compra ' + (index + 1) + ' (' + description + '): use "sharedWith" ou "debtor", não os dois.');
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): use "sharedWith" ou "debtor", não os dois.');
     }
 
-    const readPersonAmount = (value: unknown, label: string, fullAmountAllowed: boolean) => {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        throw new Error('Compra ' + (index + 1) + ' (' + description + '): "' + label + '" deve conter pessoa e valor em centavos.');
-      }
-      const personData = value as Record<string, unknown>;
-      const requestedPerson = typeof personData.person === 'string' ? personData.person.trim() : '';
-      const person = personRecords.get(normalize(requestedPerson));
-      if (!person) {
-        throw new Error('Compra ' + (index + 1) + ' (' + description + '): cadastre "' + (requestedPerson || 'a pessoa') + '" em Devedores antes de importar.');
-      }
-      const amountCents = personData.amountCents === undefined && fullAmountAllowed
-        ? totalCents : Number(personData.amountCents);
-      if (!Number.isSafeInteger(amountCents) || amountCents <= 0
-        || (fullAmountAllowed ? amountCents > totalCents : amountCents >= totalCents)) {
-        throw new Error('Compra ' + (index + 1) + ' (' + description + '): valor de "' + label + '" inválido.');
-      }
-      return { person, amountCents };
-    };
-
-    let sharedWith: { person: string; amountCents: number } | undefined;
+    const sharedLinks: Array<{ person: string; amountCents: number }> = [];
     let debtorDue: { person: string; amountCents: number } | undefined;
-    if (rawShared !== undefined) {
-      sharedWith = readPersonAmount(rawShared, 'sharedWith', false);
-    } else if (rawDebtor !== undefined) {
-      debtorDue = readPersonAmount(rawDebtor, 'debtor', true);
+    const readShared = (value: unknown, label: string) => {
+      const rawLinks = Array.isArray(value) ? value : [value];
+      if (!rawLinks.length) throw new Error('Registro ' + (index + 1) + ': "' + label + '" não pode estar vazio.');
+      const names = new Set<string>();
+      let allocated = 0;
+      for (const rawLink of rawLinks) {
+        if (!rawLink || typeof rawLink !== 'object' || Array.isArray(rawLink)) {
+          throw new Error('Registro ' + (index + 1) + ': "' + label + '" deve conter pessoa e valor em centavos.');
+        }
+        const link = rawLink as Record<string, unknown>;
+        const person = typeof link.person === 'string' ? link.person.trim() : '';
+        const key = normalize(person);
+        const amountCents = Number(link.amountCents);
+        if (!key) throw new Error('Registro ' + (index + 1) + ': informe o nome de cada pessoa vinculada.');
+        if (names.has(key)) throw new Error('Registro ' + (index + 1) + ': uma pessoa não pode aparecer duas vezes no mesmo registro.');
+        if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+          throw new Error('Registro ' + (index + 1) + ': valor vinculado inválido para ' + person + '.');
+        }
+        allocated += amountCents;
+        if (!Number.isSafeInteger(allocated) || allocated > totalCents) {
+          throw new Error('Registro ' + (index + 1) + ': a soma dos valores vinculados supera o valor da compra.');
+        }
+        names.add(key);
+        sharedLinks.push({ person, amountCents });
+      }
+    };
+    if (rawShared !== undefined) readShared(rawShared, 'sharedWith');
+    else if (rawDebtor !== undefined) {
+      if (!rawDebtor || typeof rawDebtor !== 'object' || Array.isArray(rawDebtor)) {
+        throw new Error('Registro ' + (index + 1) + ': "debtor" deve conter uma pessoa.');
+      }
+      const debt = rawDebtor as Record<string, unknown>;
+      const person = typeof debt.person === 'string' ? debt.person.trim() : '';
+      const amountCents = debt.amountCents === undefined ? totalCents : Number(debt.amountCents);
+      if (!person || !Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > totalCents) {
+        throw new Error('Registro ' + (index + 1) + ': pessoa ou valor devedor inválido.');
+      }
+      debtorDue = { person, amountCents };
     } else if (legacyDebtorCategory) {
-      // Supports the earlier JSON example: category "Devedores" plus a note
-      // like "Lançamento separado referente à Lê." records the full amount as owed.
       const noteMatch = notes?.match(/referente\s+(?:à|a)\s+(.+?)[.!]?$/i);
       const descriptionMatch = description.match(/\s-\s(.+)$/);
       const inferredPerson = noteMatch?.[1]?.trim() || descriptionMatch?.[1]?.trim() || '';
-      debtorDue = readPersonAmount({ person: inferredPerson }, 'debtor', true);
+      if (!inferredPerson) throw new Error('Registro ' + (index + 1) + ': não foi possível identificar a pessoa da categoria Devedores.');
+      debtorDue = { person: inferredPerson, amountCents: totalCents };
+    }
+    if (type === 'income' && (sharedLinks.length || debtorDue)) {
+      throw new Error('Receitas não podem ter valores a receber vinculados.');
     }
 
+    let cardId: string | undefined;
+    let firstDueMonth: string | undefined;
+    let installmentsCount = 1;
+    if (mode === 'card-credit') {
+      const rawCard = typeof row.card === 'string' ? row.card.trim()
+        : typeof row.cardId === 'string' ? row.cardId.trim() : rootCardValue;
+      if (!rawCard) throw new Error('Registro ' + (index + 1) + ' (' + description + '): informe o cartão no campo "card".');
+      const card = cards.find((item) => item.id === rawCard || normalize(item.name) === normalize(rawCard));
+      if (!card) throw new Error('Registro ' + (index + 1) + ' (' + description + '): cartão "' + rawCard + '" não está cadastrado neste NEXO.');
+      cardId = card.id;
+      const dueMonthValue = row.firstDueMonth ?? data.firstDueMonth;
+      firstDueMonth = dueMonthValue === undefined ? addMonth(purchaseDate) : String(dueMonthValue);
+      if (!validMonth(firstDueMonth)) {
+        throw new Error('Registro ' + (index + 1) + ' (' + description + '): primeira fatura inválida; use AAAA-MM.');
+      }
+      installmentsCount = row.installmentsCount === undefined ? rootCount : Number(row.installmentsCount);
+      if (!Number.isInteger(installmentsCount) || installmentsCount < 1 || installmentsCount > 240) {
+        throw new Error('Registro ' + (index + 1) + ' (' + description + '): parcelas devem ser um inteiro entre 1 e 240.');
+      }
+    } else if (row.installmentsCount !== undefined && Number(row.installmentsCount) !== 1) {
+      throw new Error('Registro ' + (index + 1) + ' (' + description + '): quantidade de parcelas só é válida para cartão de crédito.');
+    }
+
+    let accountId: string | undefined;
+    if (['pix', 'cash', 'card-debit'].includes(mode)) {
+      const rawAccount = typeof row.account === 'string' ? row.account.trim()
+        : typeof row.accountId === 'string' ? row.accountId.trim()
+          : typeof row.accountName === 'string' ? row.accountName.trim() : rootAccountValue;
+      if (!rawAccount) {
+        throw new Error('Registro ' + (index + 1) + ' (' + description + '): informe "account" ou "accountId" para esta forma de pagamento.');
+      }
+      const account = accounts.find((item) => item.id === rawAccount || normalize(item.name) === normalize(rawAccount));
+      if (!account) {
+        throw new Error('Registro ' + (index + 1) + ' (' + description + '): conta "' + rawAccount + '" não está cadastrada neste NEXO.');
+      }
+      accountId = account.id;
+    }
     return {
-      description, totalCents, purchaseDate: row.purchaseDate, firstDueMonth, installmentsCount,
+      description, totalCents, purchaseDate, mode, type, accountId, cardId, firstDueMonth, installmentsCount,
       categoryId, expenseClass: expenseClass as Transaction['expenseClass'] | undefined,
-      notes, sharedWith, debtorDue,
+      notes, sharedLinks, debtorDue,
     };
   });
 
+  const modeCounts: Record<string, number> = {};
+  for (const entry of entries) modeCounts[modeLabel(entry.mode)] = (modeCounts[modeLabel(entry.mode)] ?? 0) + 1;
   const totalCents = entries.reduce((sum, entry) => sum + entry.totalCents, 0);
-  const currentInstallments = await db.installments.where('cardId').equals(card.id).toArray();
-  const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
-  if (card.limitCents > 0 && totalCents + currentCommitment > card.limitCents) {
-    throw new Error('A importação excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
+  const creditTotals = new Map<string, number>();
+  for (const entry of entries) if (entry.mode === 'card-credit' && entry.cardId) {
+    creditTotals.set(entry.cardId, (creditTotals.get(entry.cardId) ?? 0) + entry.totalCents);
+  }
+  for (const [cardId, batchTotal] of creditTotals) {
+    const card = cards.find((item) => item.id === cardId)!;
+    const currentInstallments = await db.installments.where('cardId').equals(cardId).toArray();
+    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+    if (card.limitCents > 0 && batchTotal + currentCommitment > card.limitCents) {
+      throw new Error('A importação excede o limite cadastrado do cartão ' + card.name + '. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
+    }
   }
 
-  // Deterministic IDs prevent importing the same JSON batch twice.
-  const signature = JSON.stringify({
-    cardId: card.id,
+  const plansReserveEntries = entries.filter((entry) => entry.mode === 'reserve-plans');
+  const plansReserve = plansReserveEntries.length
+    ? await db.reserves.filter((item) => item.name.trim().toLocaleLowerCase('pt-BR') === 'planos' && !item.closed).first()
+    : undefined;
+  if (plansReserveEntries.length && !plansReserve) {
+    throw new Error('Crie ou reabra a caixinha Planos antes de importar despesas dessa forma.');
+  }
+  if (plansReserve) {
+    const reserveMoves = await db.reserveMovements.where('reserveId').equals(plansReserve.id).toArray();
+    const available = reserveMoves.reduce((sum, item) => sum + (item.type === 'withdrawal' ? -item.amountCents : item.amountCents), 0);
+    const requested = plansReserveEntries.reduce((sum, entry) => sum + entry.totalCents, 0);
+    if (requested > available) throw new Error('O saldo da caixinha Planos é insuficiente para todas as despesas do JSON.');
+  }
+
+  const legacyCreditOnly = legacyCreditBatch && entries.every((entry) => entry.mode === 'card-credit' && entry.cardId === entries[0].cardId);
+  const legacySignature = legacyCreditOnly ? JSON.stringify({
+    cardId: entries[0].cardId,
     entries: entries.map((entry) => [
       entry.description, entry.totalCents, entry.purchaseDate, entry.firstDueMonth, entry.installmentsCount,
       entry.categoryId ?? '', entry.expenseClass ?? '', entry.notes ?? '',
-      entry.sharedWith?.person ?? '', entry.sharedWith?.amountCents ?? 0,
+      entry.sharedLinks.length === 1 ? entry.sharedLinks[0].person : '', entry.sharedLinks.length === 1 ? entry.sharedLinks[0].amountCents : 0,
       entry.debtorDue?.person ?? '', entry.debtorDue?.amountCents ?? 0,
     ]),
-  });
+  }) : JSON.stringify(entries.map((entry) => [
+    entry.description, entry.totalCents, entry.purchaseDate, entry.mode, entry.type, entry.accountId ?? '',
+    entry.cardId ?? '', entry.firstDueMonth ?? '', entry.installmentsCount,
+    entry.categoryId ?? '', entry.expenseClass ?? '', entry.notes ?? '',
+    entry.sharedLinks, entry.debtorDue ?? null,
+  ]));
   let hash = 2166136261;
-  for (let index = 0; index < signature.length; index += 1) {
-    hash ^= signature.charCodeAt(index);
+  for (let index = 0; index < legacySignature.length; index += 1) {
+    hash ^= legacySignature.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
   const fingerprint = (hash >>> 0).toString(36);
+  const idPrefix = (legacyCreditOnly ? 'json-' : 'json-batch-') + fingerprint;
   const createdAt = new Date().toISOString();
-  const purchaseRows = entries.map((entry, index) => ({
-    id: 'json-' + fingerprint + '-' + (index + 1),
-    description: entry.description, totalCents: entry.totalCents, cardId: card.id,
-    categoryId: entry.categoryId, expenseClass: entry.expenseClass,
-    purchaseDate: entry.purchaseDate, firstDueMonth: entry.firstDueMonth,
-    installmentsCount: entry.installmentsCount, createdAt, notes: entry.notes,
-  }));
-  const existing = await db.purchases.bulkGet(purchaseRows.map((item) => item.id));
-  if (existing.some(Boolean)) {
-    throw new Error('Este JSON já foi importado (ou contém compras já importadas). Nenhum registro foi alterado.');
-  }
+  const purchaseRows: Array<{
+    id: string; description: string; totalCents: number; cardId: string; categoryId?: string;
+    expenseClass?: Transaction['expenseClass']; purchaseDate: string; firstDueMonth: string;
+    installmentsCount: number; createdAt: string; notes?: string;
+  }> = [];
+  const installmentRows: Array<{
+    id: string; purchaseId: string; cardId: string; number: number; count: number; amountCents: number;
+    paidCents: number; dueMonth: string; dueDate: string;
+  }> = [];
+  const transactionRows: Transaction[] = [];
+  const debtorRows: Array<{
+    id: string; person: string; description: string; originalCents: number; originDate: string;
+    categoryId?: string; originalPayment?: string; originAccountId?: string;
+    notes?: string; linkedTransactionId?: string; sharedExpenseId?: string; sharedPurchaseId?: string; createdAt: string;
+  }> = [];
+  const reserveMovementRows: Array<{
+    id: string; reserveId: string; type: 'withdrawal'; amountCents: number; date: string;
+    notes: string; linkedTransactionId: string; availableBalanceImpactCents: number;
+  }> = [];
+  const monthRecords = new Set<string>();
+  entries.forEach((entry, index) => {
+    const recordId = idPrefix + (legacyCreditOnly ? '-' : '-r-') + (index + 1);
+    let linkedPurchaseId: string | undefined;
+    let linkedTransactionId: string | undefined;
+    if (entry.mode === 'card-credit') {
+      const purchaseId = recordId;
+      linkedPurchaseId = purchaseId;
+      purchaseRows.push({
+        id: purchaseId, description: entry.description, totalCents: entry.totalCents, cardId: entry.cardId!,
+        categoryId: entry.categoryId, expenseClass: entry.expenseClass, purchaseDate: entry.purchaseDate,
+        firstDueMonth: entry.firstDueMonth!, installmentsCount: entry.installmentsCount, createdAt, notes: entry.notes,
+      });
+      const installmentAmounts = splitInstallmentCents(entry.totalCents, entry.installmentsCount);
+      installmentAmounts.forEach((amountCents, installmentIndex) => {
+        const dueMonth = monthOffset(entry.firstDueMonth!, installmentIndex);
+        const card = cards.find((item) => item.id === entry.cardId)!;
+        const day = Math.min(card.dueDay, daysInMonth(dueMonth));
+        installmentRows.push({
+          id: idPrefix + (legacyCreditOnly ? '-i-' : '-ri-') + (index + 1) + '-' + (installmentIndex + 1),
+          purchaseId, cardId: entry.cardId!, number: installmentIndex + 1, count: entry.installmentsCount,
+          amountCents, paidCents: 0, dueMonth, dueDate: dueMonth + '-' + String(day).padStart(2, '0'),
+        });
+        monthRecords.add(dueMonth);
+      });
+    } else {
+      const transactionId = recordId;
+      linkedTransactionId = transactionId;
+      const reserveId = entry.mode === 'reserve-plans' ? plansReserve?.id : undefined;
+      transactionRows.push({
+        id: transactionId, type: entry.type, description: entry.description, amountCents: entry.totalCents,
+        date: entry.purchaseDate, month: entry.purchaseDate.slice(0, 7), categoryId: entry.categoryId,
+        expenseClass: entry.type === 'expense' ? entry.expenseClass : undefined,
+        status: entry.type === 'income' ? 'received' : 'paid', paymentMode: entry.mode,
+        accountId: entry.accountId, reserveId, notes: entry.notes, createdAt,
+      });
+      monthRecords.add(entry.purchaseDate.slice(0, 7));
+      if (reserveId) reserveMovementRows.push({
+        id: idPrefix + '-rm-' + (index + 1), reserveId, type: 'withdrawal', amountCents: entry.totalCents,
+        date: entry.purchaseDate, notes: 'Despesa: ' + entry.description, linkedTransactionId: transactionId,
+        availableBalanceImpactCents: -entry.totalCents,
+      });
+    }
 
-  const installmentRows = entries.flatMap((entry, index) => {
-    const amounts = splitInstallmentCents(entry.totalCents, entry.installmentsCount);
-    return amounts.map((amountCents, installmentIndex) => {
-      const dueMonth = monthOffset(entry.firstDueMonth, installmentIndex);
-      const day = Math.min(card.dueDay, daysInMonth(dueMonth));
-      return {
-        id: 'json-' + fingerprint + '-i-' + (index + 1) + '-' + (installmentIndex + 1),
-        purchaseId: purchaseRows[index].id, cardId: card.id,
-        number: installmentIndex + 1, count: entry.installmentsCount,
-        amountCents, paidCents: 0, dueMonth,
-        dueDate: dueMonth + '-' + String(day).padStart(2, '0'),
-      };
-    });
-  });
-  const debtorRows = entries.flatMap((entry, index) => {
-    const amount = entry.sharedWith ?? entry.debtorDue;
-    if (!amount) return [];
-    return [{
-      id: 'json-' + fingerprint + '-d-' + (index + 1),
-      person: amount.person,
-      description: entry.sharedWith
+    const links = entry.sharedLinks.length ? entry.sharedLinks
+      : entry.debtorDue ? [entry.debtorDue] : [];
+    links.forEach((link, linkIndex) => debtorRows.push({
+      id: idPrefix + (legacyCreditOnly ? '-d-' : '-d-') + (index + 1) + '-' + (linkIndex + 1),
+      person: link.person,
+      description: entry.sharedLinks.length
         ? 'Divisão da conta: ' + entry.description
-        : 'Compra para ' + amount.person + ': ' + entry.description,
-      originalCents: amount.amountCents, originDate: entry.purchaseDate,
-      categoryId: entry.categoryId, originalPayment: 'Cartão de crédito',
-      notes: entry.notes, sharedPurchaseId: purchaseRows[index].id, createdAt,
-    }];
-  });
-  const months = [...new Set(installmentRows.map((item) => item.dueMonth))]
-    .map((month) => ({ id: month, month, createdAt }));
-
-  await db.transaction('rw', db.purchases, db.installments, db.months, db.debtors, async () => {
-    await db.purchases.bulkAdd(purchaseRows);
-    await db.installments.bulkAdd(installmentRows);
-    await db.months.bulkPut(months);
-    if (debtorRows.length) await db.debtors.bulkAdd(debtorRows);
+        : 'Compra para ' + link.person + ': ' + entry.description,
+      originalCents: link.amountCents, originDate: entry.purchaseDate, categoryId: entry.categoryId,
+      originalPayment: modeLabel(entry.mode), originAccountId: entry.accountId,
+      notes: entry.notes, linkedTransactionId, sharedExpenseId: linkedTransactionId,
+      sharedPurchaseId: linkedPurchaseId, createdAt,
+    }));
   });
 
-  return {
-    importedCount: purchaseRows.length, totalCents, cardName: card.name,
-    firstDueMonth: entries[0].firstDueMonth, debtorCount: debtorRows.length,
-  };
+  const existingPurchases = await db.purchases.bulkGet(purchaseRows.map((item) => item.id));
+  const existingTransactions = await db.transactions.bulkGet(transactionRows.map((item) => item.id));
+  const existingInstallments = await db.installments.bulkGet(installmentRows.map((item) => item.id));
+  const existingDebtorIds = await db.debtors.bulkGet(debtorRows.map((item) => item.id));
+  if ([...existingPurchases, ...existingTransactions, ...existingInstallments, ...existingDebtorIds].some(Boolean)) {
+    throw new Error('Este JSON já foi importado (ou contém registros já importados). Nenhum registro foi alterado.');
+  }
+  entries.forEach((entry) => { if (entry.mode === 'card-credit') monthRecords.add(entry.firstDueMonth!); });
+
+  const monthRows = [...monthRecords].map((month) => ({ id: month, month, createdAt }));
+  await db.transaction(
+    'rw',
+    [db.transactions, db.purchases, db.installments, db.months, db.debtors, db.reserves, db.reserveMovements],
+    async () => {
+      if (transactionRows.length) await db.transactions.bulkAdd(transactionRows);
+      if (purchaseRows.length) await db.purchases.bulkAdd(purchaseRows);
+      if (installmentRows.length) await db.installments.bulkAdd(installmentRows);
+      if (monthRows.length) await db.months.bulkPut(monthRows);
+      if (debtorRows.length) await db.debtors.bulkAdd(debtorRows);
+      if (reserveMovementRows.length) await db.reserveMovements.bulkAdd(reserveMovementRows);
+    },
+  );
+
+  return { importedCount: entries.length, totalCents, debtorCount: debtorRows.length, paymentModeCounts: modeCounts };
 }
-
 
 /**
  * Update a credit purchase and regenerate its installment schedule.

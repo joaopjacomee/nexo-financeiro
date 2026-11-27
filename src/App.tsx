@@ -18,7 +18,7 @@ import {
   clearTestData, createCardPurchase, createDebtor, createTransfer, createWishlistPurchase, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
   deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve, saveReserveClosing,
-  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importCardPurchasesFromJson, updateCardPurchase,
+  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importPurchasesFromJson, updateCardPurchase,
 } from './lib/operations';
 import type {
   Account,
@@ -1178,10 +1178,11 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
     let payload: unknown;
     try { payload = JSON.parse(purchaseImportJson); }
     catch { setMessage('JSON inválido. Confira a sintaxe antes de importar.'); return; }
-    let summary: Awaited<ReturnType<typeof importCardPurchasesFromJson>> | undefined;
-    const ok = await act(async () => { summary = await importCardPurchasesFromJson(payload); }, 'Compras importadas com sucesso.');
+    let summary: Awaited<ReturnType<typeof importPurchasesFromJson>> | undefined;
+    const ok = await act(async () => { summary = await importPurchasesFromJson(payload); }, 'Movimentações importadas com sucesso.');
     if (ok && summary) {
-      setMessage(summary.importedCount + ' compras importadas para ' + summary.cardName + ', total de ' + money(summary.totalCents) + '. ' + summary.debtorCount + ' valores a receber foram vinculados.');
+      const methods = Object.entries(summary.paymentModeCounts).map(([name, count]) => count + ' ' + name).join(', ');
+      setMessage(summary.importedCount + ' registros importados, total de ' + money(summary.totalCents) + '. Formas de pagamento: ' + methods + '. ' + summary.debtorCount + ' valores a receber foram vinculados.');
       setPurchaseImportJson('');
     }
   };
@@ -1200,14 +1201,14 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
     </Panel>
     {privateSectionsUnlocked && <Panel className="json-import-panel">
       <div className="settings-icon purple"><Upload size={20}/></div>
-      <h3>Importar compras por JSON</h3>
-      <p>Importe várias compras no cartão de uma só vez. O sistema valida cartão, categorias, datas, valores e pessoas antes de gravar os dados.</p>
+      <h3>Importar movimentações por JSON</h3>
+      <p>Importe várias compras e movimentações de uma só vez, usando Pix, dinheiro, cartão de débito, cartão de crédito, Reserva de planos ou outro meio. É possível misturar formas de pagamento no mesmo arquivo.</p>
       <Field label="Conteúdo JSON">
-        <textarea className="json-import-textarea" rows={9} value={purchaseImportJson} onChange={(event) => setPurchaseImportJson(event.target.value)} placeholder={'Cole aqui o JSON com "card", "firstDueMonth" e "purchases".'}/>
+        <textarea className="json-import-textarea" rows={9} value={purchaseImportJson} onChange={(event) => setPurchaseImportJson(event.target.value)} placeholder={'Cole um JSON com "purchases" e informe em cada item: description, totalCents, purchaseDate e paymentMode. Para Pix/dinheiro/débito, informe também "account"; para crédito, "card" e opcionalmente "installmentsCount" e "firstDueMonth".'}/>
       </Field>
       <div className="settings-actions">
         <label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(event) => { void loadPurchaseJsonFile(event.target.files?.[0]); event.currentTarget.value = ''; }}/></label>
-        <Button onClick={() => void importPurchasesJson()} disabled={!purchaseImportJson.trim()}>Importar compras</Button>
+        <Button onClick={() => void importPurchasesJson()} disabled={!purchaseImportJson.trim()}>Importar movimentações</Button>
       </div>
       <small className="json-import-hint">Disponível somente enquanto as áreas privadas estiverem desbloqueadas com o código. A mesma importação não será duplicada.</small>
     </Panel>}
