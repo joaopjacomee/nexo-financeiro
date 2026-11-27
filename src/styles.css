@@ -97,3 +97,12 @@
 .debt-links-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .debt-links-footer small{flex:1;min-width:150px}
 @media(max-width:520px){.debt-link-row{grid-template-columns:minmax(0,1fr) 30px}.debt-link-row .form-field:first-child{grid-column:1/-1}.debt-link-remove{grid-column:2;grid-row:2}}
+
+/* Filter-aware totals for the transactions list */
+.movement-totals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.movement-total{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border:1px solid #eee8f6;border-radius:11px;background:#fdfcff}
+.movement-total span{font-size:10px;font-weight:600;color:#857a91}
+.movement-total strong{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+.movement-total.expense strong{color:var(--red)}
+.movement-total.income strong{color:var(--green)}
+@media(max-width:520px){.movement-totals{grid-template-columns:1fr}.movement-total{padding:12px 14px}}
