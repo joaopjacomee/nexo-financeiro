@@ -3,7 +3,7 @@ import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, CalendarDays,
   CalendarRange, Check, ChevronLeft, ChevronRight, CreditCard, Download, Eye, EyeOff, FileBarChart,
   FileText, FolderOpen, Gauge, Goal, HandCoins, Landmark, Layers3, LayoutDashboard, Menu, Plus,
-  Search, Settings, ShieldCheck, Smartphone, Target, TrendingDown, TrendingUp, Wallet, X, Upload,
+  Search, Settings, ShieldCheck, Smartphone, Target, TrendingDown, TrendingUp, Wallet, X, Upload, Pencil,
   PiggyBank, Receipt, CircleHelp, Trash2, Undo2, Redo2, ShoppingBag,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -18,7 +18,7 @@ import {
   clearTestData, createCardPurchase, createDebtor, createTransfer, createWishlistPurchase, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
   deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve, saveReserveClosing,
-  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importCardPurchasesFromJson,
+  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importCardPurchasesFromJson, updateCardPurchase,
 } from './lib/operations';
 import type {
   Account,
@@ -417,6 +417,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Transaction | null>(null);
+  const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   useEffect(() => {
     if (!openNewRequested) return;
     setEditing(null);
@@ -474,8 +475,9 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
       <MultiSelectFilter label="Tipo" allLabel="Todos os tipos" options={[{ value: 'income', label: 'Receitas' }, { value: 'expense', label: 'Despesas' }]} selected={typeFilters} onChange={setTypeFilters}/>
       <MultiSelectFilter label="Categoria" allLabel="Todas as categorias" options={[{ value: 'uncategorized', label: 'Sem categoria' }, ...data.categories.map((category) => ({ value: category.id, label: category.name }))]} selected={categoryFilters} onChange={setCategoryFilters}/>
       <MultiSelectFilter label="Classificação" allLabel="Todas as classificações" options={[{ value: 'Investimento', label: 'Investimento' }, { value: 'Essencial', label: 'Essencial' }, { value: 'Supérfluo', label: 'Supérfluo' }]} selected={statusFilters} onChange={setStatusFilters}/>
-    </div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>CLASSIFICAÇÃO</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{movementRows.map((row) => row.kind === 'transaction' ? (() => { const item = row.item; return <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}{data.debtors.find((debtor) => debtor.sharedExpenseId === item.id) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedExpenseId === item.id)?.person}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : item.paymentMode === 'reserve-plans' ? 'Reserva de planos' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <span className="status-pill">{item.expenseClass ?? 'Essencial'}</span>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { void act(() => deleteTransaction(item.id)); }}><Trash2 size={14}/></button></div></td></tr>; })() : (() => { const installment = row.item; const purchase = data.purchases.find((entry) => entry.id === installment.purchaseId); const card = data.cards.find((entry) => entry.id === installment.cardId); return <tr key={`installment-${installment.id}`}><td><div className="table-title"><span className="tx-type-icon expense"><CreditCard size={14}/></span><div><strong>{purchase?.description ?? 'Compra parcelada'}</strong><small className="subline">Parcela {installment.number}/{installment.count}</small></div></div></td><td>{data.categories.find((cat) => cat.id === purchase?.categoryId)?.name ?? '—'}</td><td>{card?.name ?? 'Cartão'}<small className="subline">Cartão de crédito</small></td><td>{dateBR(installment.dueDate)}</td><td><span className="status-pill">{purchase?.expenseClass ?? 'Essencial'}</span></td><td className="negative">{showValues ? money(installment.amountCents) : '••••'}</td><td><span className="subline">Parcela</span></td></tr>; })())}</tbody></table>{!movementRows.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
+    </div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>CLASSIFICAÇÃO</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{movementRows.map((row) => row.kind === 'transaction' ? (() => { const item = row.item; return <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}{data.debtors.find((debtor) => debtor.sharedExpenseId === item.id) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedExpenseId === item.id)?.person}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : item.paymentMode === 'reserve-plans' ? 'Reserva de planos' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <span className="status-pill">{item.expenseClass ?? 'Essencial'}</span>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title={item.type === 'expense' ? 'Editar despesa' : 'Editar receita'} aria-label={item.type === 'expense' ? 'Editar despesa' : 'Editar receita'} onClick={() => { setEditing(item); setModal(true); }}><Pencil size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { void act(() => deleteTransaction(item.id)); }}><Trash2 size={14}/></button></div></td></tr>; })() : (() => { const installment = row.item; const purchase = data.purchases.find((entry) => entry.id === installment.purchaseId); const card = data.cards.find((entry) => entry.id === installment.cardId); return <tr key={`installment-${installment.id}`}><td><div className="table-title"><span className="tx-type-icon expense"><CreditCard size={14}/></span><div><strong>{purchase?.description ?? 'Compra parcelada'}</strong><small className="subline">Parcela {installment.number}/{installment.count}</small></div></div></td><td>{data.categories.find((cat) => cat.id === purchase?.categoryId)?.name ?? '—'}</td><td>{card?.name ?? 'Cartão'}<small className="subline">Cartão de crédito</small></td><td>{dateBR(installment.dueDate)}</td><td><span className="status-pill">{purchase?.expenseClass ?? 'Essencial'}</span></td><td className="negative">{showValues ? money(installment.amountCents) : '••••'}</td><td><div className="row-actions">{purchase && <button className="icon-button mini" title="Editar parcelamento completo" aria-label="Editar parcelamento completo" onClick={() => setEditingPurchase(purchase)}><Pencil size={14}/></button>}</div></td></tr>; })())}</tbody></table>{!movementRows.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
     {modal && <TransactionModal data={data} month={month} editing={editing} privateSectionsUnlocked={privateSectionsUnlocked} onClose={() => { setModal(false); setEditing(null); }} onSubmit={submit}/> }
+    {editingPurchase && <PurchaseEditModal purchase={editingPurchase} data={data} act={act} onClose={() => setEditingPurchase(null)}/> }
   </>;
 }
 function StatusPill({ status }: { status: Transaction['status'] }) {
@@ -606,6 +608,78 @@ function PurchaseModal({ data, onClose, act }: { data: Snapshot; onClose: () => 
   }), splitPerson ? `Compra registrada; a parte de ${splitPerson} foi adicionada a Devedores.` : 'Compra e parcelas registradas.').then((ok) => { if (ok) onClose(); });
   return <Modal title="Registrar compra no crédito" onClose={onClose}><div className="form-grid"><Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field><Field label="Valor total (R$)"><MoneyInput value={form.total} onChange={(total) => setForm({ ...form, total })}/></Field><Field label="Cartão"><select value={form.cardId} onChange={(e) => { const cardId = e.target.value; setForm({ ...form, cardId, firstDueMonth: suggestFirstInvoiceMonth(form.purchaseDate, data.cards.find((card) => card.id === cardId)) }); }}>{data.cards.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.institution}</option>)}</select></Field><Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}/></Field><Field label="Data da compra"><input type="date" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value, firstDueMonth: suggestFirstInvoiceMonth(e.target.value, data.cards.find((card) => card.id === form.cardId)) })}/></Field><Field label="Mês da primeira fatura"><input type="month" value={form.firstDueMonth} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field><Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label="Classificação"><select value={form.expenseClass} onChange={(e) => setForm({ ...form, expenseClass: e.target.value as NonNullable<Transaction['expenseClass']> })}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field><Field label="Dividir esta compra com"><select value={splitPerson} onChange={(e) => setSplitPerson(e.target.value)}><option value="">Não dividir</option>{knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}>{person}</option>)}</select></Field>{splitPerson && <><Field label={`Parte de ${splitPerson} (50%)`}><input value={money(splitAmountCents)} readOnly/></Field><div className="form-footnote"><HandCoins size={15}/> A parte de {splitPerson} será registrada em Devedores e poderá ser recebida depois.</div></>}<Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field><div className="form-footnote"><CreditCard size={15}/> A primeira fatura é sugerida pelo fechamento do cartão. Se a compra ocorreu após o fechamento, a primeira parcela vai para o mês seguinte; você ainda pode ajustar o mês manualmente.</div><div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!data.cards.length}>Criar parcelamento</Button></div></div></Modal>;
 }
+
+function PurchaseEditModal({ purchase, data, act, onClose }: {
+  purchase: Purchase; data: Snapshot; act: CommonProps['act']; onClose: () => void;
+}) {
+  const linkedDebtor = data.debtors.find((item) => item.sharedPurchaseId === purchase.id);
+  const knownPeople = Array.from(new Map(data.debtors.map((item) => {
+    const person = item.person.trim();
+    return [person.toLocaleLowerCase('pt-BR'), person] as const;
+  })).values());
+  const [form, setForm] = useState({
+    description: purchase.description,
+    total: fromCents(purchase.totalCents),
+    cardId: purchase.cardId,
+    categoryId: purchase.categoryId ?? '',
+    expenseClass: (purchase.expenseClass ?? 'Essencial') as NonNullable<Transaction['expenseClass']>,
+    purchaseDate: purchase.purchaseDate,
+    firstDueMonth: purchase.firstDueMonth,
+    installmentsCount: String(purchase.installmentsCount),
+    splitPerson: linkedDebtor?.person ?? '',
+    splitAmount: fromCents(linkedDebtor?.originalCents ?? Math.floor(purchase.totalCents / 2)),
+    notes: purchase.notes ?? '',
+  });
+  const [hasPayments, setHasPayments] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let active = true;
+    db.installments.where('purchaseId').equals(purchase.id).toArray()
+      .then((items) => { if (active) setHasPayments(items.some((item) => item.paidCents > 0)); });
+    return () => { active = false; };
+  }, [purchase.id]);
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      const ok = await act(() => updateCardPurchase({
+        id: purchase.id,
+        description: form.description,
+        totalCents: toCents(form.total),
+        cardId: form.cardId,
+        categoryId: form.categoryId || undefined,
+        expenseClass: form.expenseClass,
+        purchaseDate: form.purchaseDate,
+        firstDueMonth: form.firstDueMonth,
+        installmentsCount: Number(form.installmentsCount),
+        notes: form.notes,
+        sharedWith: form.splitPerson ? { person: form.splitPerson, amountCents: toCents(form.splitAmount) } : undefined,
+      }), 'Parcelamento atualizado.');
+      if (ok) onClose();
+    } finally { setSaving(false); }
+  };
+
+  return <Modal title="Editar parcelamento" onClose={onClose}>
+    <div className="form-grid">
+      <Field label="Descrição" wide><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></Field>
+      <Field label="Valor total (R$)"><MoneyInput value={form.total} onChange={(total) => setForm({ ...form, total })}/></Field>
+      <Field label="Cartão"><select value={form.cardId} disabled={hasPayments} onChange={(e) => setForm({ ...form, cardId: e.target.value })}>{data.cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.institution}</option>)}</select></Field>
+      <Field label="Quantidade de parcelas"><input type="number" min="1" max="240" value={form.installmentsCount} disabled={hasPayments} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}/></Field>
+      <Field label="Data da compra"><input type="date" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value })}/></Field>
+      <Field label="Primeira fatura"><input type="month" value={form.firstDueMonth} disabled={hasPayments} onChange={(e) => setForm({ ...form, firstDueMonth: e.target.value })}/></Field>
+      <Field label="Categoria"><select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
+      <Field label="Classificação"><select value={form.expenseClass} onChange={(e) => setForm({ ...form, expenseClass: e.target.value as NonNullable<Transaction['expenseClass']> })}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>
+      <Field label="Pessoa com valor a receber"><select value={form.splitPerson} onChange={(e) => setForm({ ...form, splitPerson: e.target.value, splitAmount: e.target.value && !form.splitPerson ? fromCents(Math.floor(toCents(form.total) / 2)) : form.splitAmount })}><option value="">Não vincular dívida</option>{knownPeople.map((person) => <option key={person.toLocaleLowerCase('pt-BR')} value={person}>{person}</option>)}</select></Field>
+      {form.splitPerson && <Field label={'Valor a receber de ' + form.splitPerson + ' (R$)'}><MoneyInput value={form.splitAmount} onChange={(splitAmount) => setForm({ ...form, splitAmount })}/></Field>}
+      <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
+      {hasPayments
+        ? <div className="form-footnote field-wide"><ShieldCheck size={15}/> Já existe pagamento de fatura vinculado. Você ainda pode editar descrição, valor, data da compra, categoria e demais detalhes; cartão, quantidade de parcelas e primeira fatura ficam bloqueados para preservar os pagamentos.</div>
+        : <div className="form-footnote field-wide"><CreditCard size={15}/> Alterar a quantidade de parcelas ou a primeira fatura atualizará o cronograma completo desta compra.</div>}
+      <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={() => void submit()} disabled={saving || !data.cards.length}>{saving ? 'Salvando…' : 'Salvar alterações'}</Button></div>
+    </div>
+  </Modal>;
+}
+
 function InvoicesPage({ data, month, setMonth, showValues, act, revision }: CommonProps) {
   const [payments, setPayments] = useState<InvoicePayment[]>([]);
   const [installments, setInstallments] = useState<Awaited<ReturnType<typeof getInstallmentsForMonth>>>([]);
@@ -622,13 +696,14 @@ function InvoicePaymentModal({ data, month, onClose, act }: { data: Snapshot; mo
 
 function InstallmentsPage({ data, month, setMonth, showValues, revision, act }: CommonProps) {
   const [items, setItems] = useState<Installment[]>([]);
+  const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   const [filter, setFilter] = useState('active');
   useEffect(() => { db.installments.toArray().then(setItems); }, [revision]);
   const purchases = new Map(data.purchases.map((purchase) => [purchase.id, purchase]));
   const eligibleItems = items.filter((item) => isMonthInAccountingPeriod(item.dueMonth));
   const filtered = eligibleItems.filter((item) => item.dueMonth === month && (filter === 'all' || (filter === 'active' ? item.paidCents < item.amountCents : item.paidCents >= item.amountCents))).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const unpaidTotal = filtered.reduce((sum, item) => sum + item.amountCents - item.paidCents, 0);
-  return <><PageHeading eyebrow="COMPROMISSOS FUTUROS" title="Parcelamentos" description="Cada compra aparece no mês da parcela, com a data original da compra e o número da parcela atualizado." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><span className="subtle-tag">{filtered.length} PARCELAS NO MÊS</span></div>}/><div className="stat-grid stat-grid-three"><StatCard label="Parcelas no mês" value={String(filtered.length)} icon={CalendarDays}/><StatCard label="Valor restante no mês" value={money(unpaidTotal)} icon={Wallet} hidden={!showValues}/><StatCard label="Parcelamentos ativos" value={String(new Set(eligibleItems.filter((item) => item.paidCents < item.amountCents).map((item) => item.purchaseId)).size)} icon={CreditCard}/></div><Panel><div className="filter-toolbar"><div><h3>Compras parceladas</h3><p className="panel-subtitle">A compra se repete nos meses seguintes até completar todas as parcelas.</p></div><select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="active">Ativos</option><option value="done">Concluídos</option><option value="all">Todos</option></select></div><div className="table-scroll"><table><thead><tr><th>COMPRA</th><th>CARTÃO</th><th>PARCELAS</th><th>DATA DA COMPRA</th><th>VENCIMENTO</th><th>VALOR</th><th>STATUS</th><th></th></tr></thead><tbody>{filtered.map((item) => { const purchase = purchases.get(item.purchaseId); return <tr key={item.id}><td><strong>{purchase?.description ?? 'Compra removida'}</strong>{data.debtors.find((debtor) => debtor.sharedPurchaseId === item.purchaseId) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedPurchaseId === item.purchaseId)?.person}</small>}<small className="subline">Total: {showValues ? money(purchase?.totalCents ?? 0) : '••••'}</small></td><td>{data.cards.find((card) => card.id === item.cardId)?.name ?? '—'}</td><td>{item.number}/{item.count}</td><td>{purchase ? dateBR(purchase.purchaseDate) : '—'}</td><td>{dateBR(item.dueDate)}</td><td>{showValues ? money(item.amountCents) : '••••'}</td><td><span className={`status-pill ${item.paidCents >= item.amountCents ? 'status-received' : 'status-pending'}`}>{item.paidCents >= item.amountCents ? 'Paga' : item.paidCents > 0 ? 'Parcial' : 'Em aberto'}</span></td><td><button className="icon-button mini danger-icon" title="Excluir compra e todas as parcelas" onClick={() => { void act(() => deletePurchase(item.purchaseId), 'Compra e parcelas excluídas.'); }}><Trash2 size={14}/></button></td></tr>; })}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma parcela para este mês e filtro."/>}</div></Panel></>;
+  return <><PageHeading eyebrow="COMPROMISSOS FUTUROS" title="Parcelamentos" description="Cada compra aparece no mês da parcela, com a data original da compra e o número da parcela atualizado." action={<div className="inline-actions"><MonthSelector month={month} setMonth={setMonth}/><span className="subtle-tag">{filtered.length} PARCELAS NO MÊS</span></div>}/><div className="stat-grid stat-grid-three"><StatCard label="Parcelas no mês" value={String(filtered.length)} icon={CalendarDays}/><StatCard label="Valor restante no mês" value={money(unpaidTotal)} icon={Wallet} hidden={!showValues}/><StatCard label="Parcelamentos ativos" value={String(new Set(eligibleItems.filter((item) => item.paidCents < item.amountCents).map((item) => item.purchaseId)).size)} icon={CreditCard}/></div><Panel><div className="filter-toolbar"><div><h3>Compras parceladas</h3><p className="panel-subtitle">A compra se repete nos meses seguintes até completar todas as parcelas.</p></div><select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="active">Ativos</option><option value="done">Concluídos</option><option value="all">Todos</option></select></div><div className="table-scroll"><table><thead><tr><th>COMPRA</th><th>CARTÃO</th><th>PARCELAS</th><th>DATA DA COMPRA</th><th>VENCIMENTO</th><th>VALOR</th><th>STATUS</th><th></th></tr></thead><tbody>{filtered.map((item) => { const purchase = purchases.get(item.purchaseId); return <tr key={item.id}><td><strong>{purchase?.description ?? 'Compra removida'}</strong>{data.debtors.find((debtor) => debtor.sharedPurchaseId === item.purchaseId) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedPurchaseId === item.purchaseId)?.person}</small>}<small className="subline">Total: {showValues ? money(purchase?.totalCents ?? 0) : '••••'}</small></td><td>{data.cards.find((card) => card.id === item.cardId)?.name ?? '—'}</td><td>{item.number}/{item.count}</td><td>{purchase ? dateBR(purchase.purchaseDate) : '—'}</td><td>{dateBR(item.dueDate)}</td><td>{showValues ? money(item.amountCents) : '••••'}</td><td><span className={`status-pill ${item.paidCents >= item.amountCents ? 'status-received' : 'status-pending'}`}>{item.paidCents >= item.amountCents ? 'Paga' : item.paidCents > 0 ? 'Parcial' : 'Em aberto'}</span></td><td><div className="row-actions">{purchase && <button className="icon-button mini" title="Editar parcelamento completo" aria-label="Editar parcelamento completo" onClick={() => setEditingPurchase(purchase)}><Pencil size={14}/></button>}<button className="icon-button mini danger-icon" title="Excluir compra e todas as parcelas" onClick={() => { void act(() => deletePurchase(item.purchaseId), 'Compra e parcelas excluídas.'); }}><Trash2 size={14}/></button></div></td></tr>; })}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma parcela para este mês e filtro."/>}</div></Panel>{editingPurchase && <PurchaseEditModal purchase={editingPurchase} data={data} act={act} onClose={() => setEditingPurchase(null)}/>}</>;
 }
 function DebtorsPage({ data, showValues, revision, act }: CommonProps) {
   const [metrics, setMetrics] = useState<Awaited<ReturnType<typeof getDebtorMetrics>>>([]);
