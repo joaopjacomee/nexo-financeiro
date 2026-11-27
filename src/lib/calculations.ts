@@ -25,6 +25,71 @@ export function calculateReserveRemaining(targetCents: number, reservedCents: nu
   return Math.max(targetCents - reservedCents, 0);
 }
 
+/** Annual effective rate converted to one Brazilian bank-business-day rate. */
+export function calculateDailyReserveRate(annualRatePercent: number): number {
+  if (!Number.isFinite(annualRatePercent) || annualRatePercent < 0 || annualRatePercent > 100) {
+    throw new Error('Taxa anual da caixinha inválida.');
+  }
+  return Math.pow(1 + annualRatePercent / 100, 1 / 252) - 1;
+}
+
+function shiftIsoDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+/** Gregorian Easter Sunday, used to derive the movable Brazilian bank holidays. */
+function easterSunday(year: number): string {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Nationwide Brazilian bank-calendar holidays; local/state holidays are not included. */
+export function getBrazilBankHolidays(year: number): Set<string> {
+  const easter = easterSunday(year);
+  return new Set([
+    `${year}-01-01`,
+    shiftIsoDate(easter, -48), // Carnival Monday
+    shiftIsoDate(easter, -47), // Carnival Tuesday
+    shiftIsoDate(easter, -2),  // Good Friday
+    `${year}-04-21`,
+    `${year}-05-01`,
+    shiftIsoDate(easter, 60),  // Corpus Christi
+    `${year}-09-07`,
+    `${year}-10-12`,
+    `${year}-11-02`,
+    `${year}-11-15`,
+    `${year}-11-20`,
+    `${year}-12-25`,
+    `${year}-12-31`, // banks do not serve the public on the last day of the year
+  ]);
+}
+
+/** Returns true only on nationwide Brazilian bank-business days. */
+export function isBrazilBankBusinessDay(date: string): boolean {
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return false;
+  const [year, month, day] = date.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return false;
+  const weekday = parsed.getUTCDay();
+  if (weekday === 0 || weekday === 6) return false;
+  return !getBrazilBankHolidays(year).has(date);
+}
+
 /** Annual effective rate converted to a daily rate on 252 business days. */
 export function calculateDailyCdiRate(annualRatePercent: number, cdiPercent: number): number {
   if (!Number.isFinite(annualRatePercent) || annualRatePercent < 0 || annualRatePercent > 100) throw new Error('Taxa CDI anual inválida.');

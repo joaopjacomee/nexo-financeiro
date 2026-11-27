@@ -4,6 +4,8 @@ import {
   allocateInvoicePayment,
   calculateAvailableCardLimit,
   calculateDailyCdiRate,
+  calculateDailyReserveRate,
+  isBrazilBankBusinessDay,
   calculateFreeCashCents,
   calculateReserveWithdrawalImpactCents,
   calculateWishlistRemainingCents,
@@ -110,4 +112,23 @@ test('despesas de preparação anteriores a dezembro de 2026 não entram no per�
   assert.equal(isMonthInAccountingPeriod('2026-11'), false);
   assert.equal(isMonthInAccountingPeriod('2026-12'), true);
   assert.equal(isMonthInAccountingPeriod('2027-01'), true);
+});
+
+test('taxa anual da caixinha é convertida para 252 dias úteis', () => {
+  const daily = calculateDailyReserveRate(14);
+  assert.ok(daily > 0 && daily < 0.001);
+  assert.ok(Math.abs(Math.pow(1 + daily, 252) - 1.14) < 1e-10);
+});
+
+test('calendário bancário brasileiro exclui fins de semana e feriados móveis e fixos', () => {
+  assert.equal(isBrazilBankBusinessDay('2026-03-02'), true);
+  assert.equal(isBrazilBankBusinessDay('2026-11-28'), false); // sábado
+  assert.equal(isBrazilBankBusinessDay('2026-02-16'), false); // Carnaval
+  assert.equal(isBrazilBankBusinessDay('2026-02-17'), false); // Carnaval
+  assert.equal(isBrazilBankBusinessDay('2026-02-18'), true); // expediente parcial, é dia útil
+  assert.equal(isBrazilBankBusinessDay('2026-04-03'), false); // Paixão de Cristo
+  assert.equal(isBrazilBankBusinessDay('2026-06-04'), false); // Corpus Christi
+  assert.equal(isBrazilBankBusinessDay('2026-11-20'), false); // Consciência Negra
+  assert.equal(isBrazilBankBusinessDay('2026-12-31'), false); // sem expediente bancário ao público
+  assert.equal(isBrazilBankBusinessDay('2026-02-30'), false); // data inválida
 });

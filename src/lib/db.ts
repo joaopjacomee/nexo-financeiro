@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import { firstUsageMonth } from './format';
 import type {
   Account, Card, Category, CdiAccrual, CdiRate, Debtor, DebtorPayment, Installment, Investment,
-  InvestmentMovement, InvoicePayment, MonthRecord, MonthlyBudget, Purchase, Reserve, ReserveMovement,
+  InvestmentMovement, InvoicePayment, MonthRecord, MonthlyBudget, Purchase, Reserve, ReserveClosing, ReserveMovement,
   Setting, Transaction, Transfer, WishlistPurchase,
 } from '../types';
 
@@ -19,6 +19,7 @@ class NexoDatabase extends Dexie {
   debtorPayments!: Table<DebtorPayment, string>;
   reserves!: Table<Reserve, string>;
   reserveMovements!: Table<ReserveMovement, string>;
+  reserveClosings!: Table<ReserveClosing, string>;
   monthlyBudgets!: Table<MonthlyBudget, string>;
   months!: Table<MonthRecord, string>;
   investments!: Table<Investment, string>;
@@ -54,6 +55,9 @@ class NexoDatabase extends Dexie {
     this.version(2).stores({
       debtors: 'id, person, dueDate, linkedTransactionId, categoryId, originAccountId, sharedExpenseId, sharedPurchaseId',
       wishlistPurchases: 'id, date',
+    });
+    this.version(3).stores({
+      reserveClosings: 'id, reserveId, month, [reserveId+month]',
     });
   }
 }

@@ -1,7 +1,7 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
-import { allocateInvoicePayment, calculateDailyCdiRate, calculateReserveWithdrawalImpactCents, splitInstallmentCents, FINANCIAL_START_MONTH } from './calculations';
-import type { Account, Card, CdiRate, Debtor, Investment, Reserve, Transaction } from '../types';
+import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, isBrazilBankBusinessDay, splitInstallmentCents, FINANCIAL_START_MONTH } from './calculations';
+import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction } from '../types';
 
 export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt' | 'month'> & {
   id?: string;
@@ -297,7 +297,7 @@ export async function saveReserve(input: Omit<Reserve, 'id' | 'createdAt'> & { i
   await db.reserves.put(value);
 }
 
-function reserveMovementDelta(type: 'deposit' | 'withdrawal' | 'yield', amountCents: number) {
+function reserveMovementDelta(type: 'deposit' | 'withdrawal' | 'yield' | 'adjustment', amountCents: number) {
   return type === 'withdrawal' ? -amountCents : amountCents;
 }
 
@@ -313,7 +313,7 @@ export async function processReserveYields(referenceDate = today()) {
         .filter((move) => move.date <= lastDate)
         .reduce((sum, move) => sum + reserveMovementDelta(move.type, move.amountCents), 0);
       const annualRate = reserve.annualYieldPercent ?? 0;
-      const dailyRate = annualRate > 0 ? Math.pow(1 + annualRate / 100, 1 / 365) - 1 : 0;
+      const dailyRate = annualRate > 0 ? calculateDailyReserveRate(annualRate) : 0;
       let remainderCents = reserve.yieldRemainderCents ?? 0;
       const cursor = new Date(`${lastDate}T00:00:00.000Z`);
       while (true) {
@@ -323,7 +323,7 @@ export async function processReserveYields(referenceDate = today()) {
         for (const move of moves) {
           if (move.date === date) balance += reserveMovementDelta(move.type, move.amountCents);
         }
-        if (dailyRate > 0 && balance > 0) {
+        if (isBrazilBankBusinessDay(date) && dailyRate > 0 && balance > 0) {
           const exactYieldCents = (balance + remainderCents) * dailyRate;
           const amountCents = Math.floor(exactYieldCents);
           remainderCents = exactYieldCents - amountCents;
@@ -345,6 +345,68 @@ export async function processReserveYields(referenceDate = today()) {
     }
   });
   return processed;
+}
+
+export async function saveReserveClosing(input: { reserveId: string; month: string; actualBalanceCents: number }): Promise<ReserveClosing> {
+  if (!/^\\d{4}-\\d{2}$/.test(input.month)) throw new Error('Selecione um mês válido.');
+  if (!Number.isSafeInteger(input.actualBalanceCents) || input.actualBalanceCents < 0) throw new Error('Informe um saldo real válido.');
+  if (input.month >= today().slice(0, 7)) throw new Error('O fechamento só pode ser feito depois que o mês terminar.');
+
+  await processReserveYields(today());
+  const reserve = await db.reserves.get(input.reserveId);
+  if (!reserve) throw new Error('Caixinha não encontrada.');
+
+  const closingDate = `${input.month}-${String(daysInMonth(input.month)).padStart(2, '0')}`;
+  const reserveClosings = await db.reserveClosings.where('reserveId').equals(input.reserveId).toArray();
+  const latestClosing = reserveClosings.sort((a, b) => b.month.localeCompare(a.month))[0];
+  if (latestClosing && input.month < latestClosing.month) {
+    throw new Error('Feche os meses em ordem. Para corrigir, ajuste primeiro o fechamento mais recente.');
+  }
+
+  const existing = reserveClosings.find((item) => item.month === input.month);
+  const movements = await db.reserveMovements.where('reserveId').equals(input.reserveId).toArray();
+  const estimatedBalanceCents = existing?.estimatedBalanceCents ?? movements
+    .filter((move) => move.date <= closingDate)
+    .reduce((sum, move) => sum + reserveMovementDelta(move.type, move.amountCents), 0);
+  const differenceCents = input.actualBalanceCents - estimatedBalanceCents;
+  const closingId = existing?.id ?? makeId();
+  const closing: ReserveClosing = {
+    id: closingId,
+    reserveId: input.reserveId,
+    month: input.month,
+    estimatedBalanceCents,
+    actualBalanceCents: input.actualBalanceCents,
+    differenceCents,
+    closedAt: new Date().toISOString(),
+  };
+
+  await db.transaction('rw', db.reserves, db.reserveMovements, db.reserveClosings, async () => {
+    if (existing) {
+      await db.reserveMovements.filter((move) => move.linkedClosingId === existing.id).delete();
+    }
+    // Future auto-yield entries were calculated from the old estimate. Rebuild them
+    // from the actual closing value, while preserving user deposits and withdrawals.
+    await db.reserveMovements.where('reserveId').equals(input.reserveId)
+      .filter((move) => move.type === 'yield' && move.date > closingDate)
+      .delete();
+    if (differenceCents !== 0) {
+      await db.reserveMovements.add({
+        id: makeId(),
+        reserveId: input.reserveId,
+        type: 'adjustment',
+        amountCents: differenceCents,
+        date: closingDate,
+        notes: `Ajuste do fechamento de ${input.month}`,
+        linkedClosingId: closingId,
+      });
+    }
+    await db.reserveClosings.put(closing);
+    await db.reserves.update(input.reserveId, { lastYieldDate: closingDate, yieldRemainderCents: 0 });
+  });
+
+  // Recalculate all days after the closing using the real balance as the base.
+  await processReserveYields(today());
+  return closing;
 }
 
 export async function moveReserve(input: { reserveId: string; type: 'deposit' | 'withdrawal'; amountCents: number; date: string; notes?: string }) {
@@ -449,10 +511,10 @@ export function parseRateFile(text: string): Array<{ date: string; annualRate: n
 export async function exportBackup() {
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
-    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
+    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
     'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
-  const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 2, exportedAt: new Date().toISOString() };
+  const payload: Record<string, unknown> = { app: 'Nexo', schemaVersion: 3, exportedAt: new Date().toISOString() };
   for (const table of tables) payload[table] = await db.table(table).toArray();
   return payload;
 }
@@ -462,7 +524,7 @@ export async function restoreBackup(payload: unknown, replace = false) {
     throw new Error('Arquivo de backup inválido ou versão não suportada.');
   }
   const schemaVersion = (payload as { schemaVersion?: number }).schemaVersion;
-  if (schemaVersion !== 1 && schemaVersion !== 2) throw new Error('Arquivo de backup inválido ou versão não suportada.');
+  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3) throw new Error('Arquivo de backup inválido ou versão não suportada.');
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
     'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
@@ -471,6 +533,7 @@ export async function restoreBackup(payload: unknown, replace = false) {
   const data = payload as Record<string, unknown>;
   for (const table of tables) {
     if (table === 'wishlistPurchases' && data[table] === undefined && schemaVersion === 1) data[table] = [];
+    if (table === 'reserveClosings' && data[table] === undefined && schemaVersion < 3) data[table] = [];
     if (!Array.isArray(data[table])) throw new Error(`Backup sem a coleção ${table}.`);
   }
   await db.transaction('rw', tables.map((table) => db.table(table)), async () => {
@@ -597,13 +660,18 @@ export async function deleteCategory(categoryId: string) {
 }
 
 export async function deleteReserve(reserveId: string) {
-  await db.transaction('rw', db.reserves, db.reserveMovements, async () => {
+  await db.transaction('rw', db.reserves, db.reserveMovements, db.reserveClosings, async () => {
     await db.reserveMovements.where('reserveId').equals(reserveId).delete();
+    await db.reserveClosings.where('reserveId').equals(reserveId).delete();
     await db.reserves.delete(reserveId);
   });
 }
 
 export async function deleteReserveMovement(movementId: string) {
+  const movement = await db.reserveMovements.get(movementId);
+  if (movement?.type === 'adjustment') {
+    throw new Error('Esse ajuste está vinculado ao fechamento mensal. Corrija o valor pelo fechamento da caixinha.');
+  }
   await db.reserveMovements.delete(movementId);
 }
 

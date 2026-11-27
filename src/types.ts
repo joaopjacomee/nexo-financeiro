@@ -43,9 +43,13 @@ export interface Reserve {
   annualYieldPercent?: number; lastYieldDate?: string; yieldRemainderCents?: number;
 }
 export interface ReserveMovement {
-  id: ID; reserveId: ID; type: 'deposit' | 'withdrawal' | 'yield'; amountCents: number; date: string; notes?: string;
+  id: ID; reserveId: ID; type: 'deposit' | 'withdrawal' | 'yield' | 'adjustment'; amountCents: number; date: string; notes?: string;
   /** Only the amount added to the reserve after this feature was enabled affects free bank cash. */
-  availableBalanceImpactCents?: number; linkedTransactionId?: ID;
+  availableBalanceImpactCents?: number; linkedTransactionId?: ID; linkedClosingId?: ID;
+}
+export interface ReserveClosing {
+  id: ID; reserveId: ID; month: string; estimatedBalanceCents: number; actualBalanceCents: number;
+  differenceCents: number; closedAt: string;
 }
 export interface WishlistPurchase {
   id: ID; description: string; amountCents: number; date: string; notes?: string; createdAt: string;

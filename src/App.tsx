@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
-import { dateBR, firstUsageMonth, fromCents, makeId, money, monthBR, today, toCents } from './lib/format';
+import { dateBR, daysInMonth, firstUsageMonth, fromCents, makeId, money, monthBR, monthOffset, today, toCents } from './lib/format';
 import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod } from './lib/calculations';
 import {
   getAccountBalances, getCardMetrics, getCategorySpend, getDebtorMetrics, getInstallmentsForMonth,
@@ -17,7 +17,7 @@ import {
 import {
   clearTestData, createCardPurchase, createDebtor, createTransfer, createWishlistPurchase, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
-  deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve,
+  deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve, saveReserveClosing,
   payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance,
 } from './lib/operations';
 import type {
@@ -31,6 +31,7 @@ import type {
   PageKey,
   Purchase,
   Reserve,
+  ReserveClosing,
   ReserveMovement,
   Transaction,
   Transfer,
@@ -62,7 +63,7 @@ const emptySnapshot: Snapshot = { categories: [], accounts: [], cards: [], trans
 
 const HISTORY_TABLES = [
   'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
-  'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
+  'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
   'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
 ] as const;
 type HistoryTableName = typeof HISTORY_TABLES[number];
@@ -694,38 +695,47 @@ function ReceiveDebtorModal({ debtorId, data, onClose, act }: { debtorId: string
 function ReservesPage({ data, showValues, revision, act }: CommonProps) {
   const [balances, setBalances] = useState<Awaited<ReturnType<typeof getReserveBalances>>>([]);
   const [movements, setMovements] = useState<ReserveMovement[]>([]);
-  const [modal, setModal] = useState<'new' | { id: string; type: 'deposit' | 'withdrawal' | 'edit' } | null>(null);
+  const [closings, setClosings] = useState<ReserveClosing[]>([]);
+  const [modal, setModal] = useState<'new' | { id: string; type: 'deposit' | 'withdrawal' | 'edit' | 'closing' } | null>(null);
   useEffect(() => {
-    Promise.all([getReserveBalances(), db.reserveMovements.orderBy('date').reverse().toArray()])
-      .then(([b, m]) => { setBalances(b); setMovements(m); });
+    Promise.all([
+      getReserveBalances(),
+      db.reserveMovements.orderBy('date').reverse().toArray(),
+      db.reserveClosings.orderBy('month').reverse().toArray(),
+    ]).then(([b, m, c]) => { setBalances(b); setMovements(m); setClosings(c); });
   }, [revision]);
   const total = balances.reduce((sum, item) => sum + item.balanceCents, 0);
   return <>
-    <PageHeading eyebrow="OBJETIVOS FINANCEIROS" title="Minhas caixinhas" description="Separe dinheiro por objetivo e configure o rendimento anual de cada caixinha." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button>}/>
+    <PageHeading eyebrow="OBJETIVOS FINANCEIROS" title="Minhas caixinhas" description="Separe dinheiro por objetivo, configure a taxa anual e confira o saldo real no fechamento de cada mês." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button>}/>
     <div className="stat-grid stat-grid-three"><StatCard label="Total nas caixinhas" value={money(total)} icon={PiggyBank} tone="lavender" hidden={!showValues}/><StatCard label="Objetivos ativos" value={String(balances.filter((item) => !item.reserve.closed).length)} icon={Target}/><StatCard label="Metas cadastradas" value={money(balances.reduce((sum, item) => sum + item.reserve.targetCents, 0))} icon={Goal} hidden={!showValues}/></div>
     <div className="reserve-grid">
       {balances.map(({ reserve, balanceCents }) => {
         const percent = reserve.targetCents ? Math.min(100, balanceCents / reserve.targetCents * 100) : 0;
         const missing = Math.max(0, reserve.targetCents - balanceCents);
+        const latestClosing = closings.filter((item) => item.reserveId === reserve.id).sort((a, b) => b.month.localeCompare(a.month))[0];
         return <Panel className="reserve-card" key={reserve.id}>
           <div className="reserve-card-top"><div className="reserve-icon"><PiggyBank size={19}/></div><span className={`status-pill ${percent >= 100 ? 'status-received' : 'status-pending'}`}>{percent >= 100 ? 'Meta atingida' : reserve.closed ? 'Concluída' : 'Em andamento'}</span></div>
           <h3>{reserve.name}</h3><div className="reserve-amount"><strong>{showValues ? money(balanceCents) : '••••••'}</strong><span>de {showValues ? money(reserve.targetCents) : '••••'}</span></div>
           <div className="progress-track tall"><i style={{ width: `${percent}%` }}/></div>
           <div className="reserve-progress-text"><span>{Math.round(percent)}% concluído</span><span>{showValues ? `${money(missing)} faltando` : '••••'}</span></div>
           <div className="reserve-yield-label">Rendimento anual: <strong>{(reserve.annualYieldPercent ?? 0).toFixed(2).replace('.', ',')}%</strong></div>
-          <div className="reserve-actions"><Button size="small" onClick={() => setModal({ id: reserve.id, type: 'deposit' })}><Plus size={14}/> Adicionar</Button><Button size="small" variant="secondary" onClick={() => setModal({ id: reserve.id, type: 'withdrawal' })}>Retirar</Button><Button size="small" variant="secondary" onClick={() => setModal({ id: reserve.id, type: 'edit' })}>Editar</Button><Button size="small" variant="danger" onClick={() => { void act(() => deleteReserve(reserve.id), 'Caixinha removida.'); }}><Trash2 size={14}/> Excluir</Button></div>
+          <div className="reserve-actions"><Button size="small" onClick={() => setModal({ id: reserve.id, type: 'deposit' })}><Plus size={14}/> Adicionar</Button><Button size="small" variant="secondary" onClick={() => setModal({ id: reserve.id, type: 'withdrawal' })}>Retirar</Button><Button size="small" variant="secondary" onClick={() => setModal({ id: reserve.id, type: 'closing' })}>Fechar mês</Button><Button size="small" variant="secondary" onClick={() => setModal({ id: reserve.id, type: 'edit' })}>Editar</Button><Button size="small" variant="danger" onClick={() => { void act(() => deleteReserve(reserve.id), 'Caixinha removida.'); }}><Trash2 size={14}/> Excluir</Button></div>
+          {latestClosing && <small className="reserve-deadline">Último fechamento: {monthBR(latestClosing.month)} · Real: {showValues ? money(latestClosing.actualBalanceCents) : '••••'}</small>}
           {reserve.targetDate && <small className="reserve-deadline">Prazo: {dateBR(reserve.targetDate)}</small>}
         </Panel>;
       })}
       {!balances.length && <Panel><EmptyState icon={PiggyBank} title="Crie sua primeira caixinha" text="Defina um objetivo, uma taxa anual e acompanhe o saldo crescer." action={<Button onClick={() => setModal('new')}><Plus size={16}/> Nova caixinha</Button>}/></Panel>}
     </div>
-    <Panel><PanelHeader title="Movimentações das caixinhas" subtitle="Depósitos, retiradas e rendimentos; é possível remover um lançamento individual."/><div className="table-scroll"><table><thead><tr><th>CAIXINHA</th><th>TIPO</th><th>DATA</th><th>OBSERVAÇÕES</th><th>VALOR</th><th></th></tr></thead><tbody>{movements.map((move) => <tr key={move.id}><td>{data.reserves.find((reserve) => reserve.id === move.reserveId)?.name ?? '—'}</td><td>{move.type === 'deposit' ? 'Depósito' : move.type === 'withdrawal' ? 'Retirada' : 'Rendimento'}</td><td>{dateBR(move.date)}</td><td>{move.notes ?? '—'}</td><td className={move.type === 'withdrawal' ? 'negative' : 'positive'}>{showValues ? money(move.amountCents) : '••••'}</td><td><button className="icon-button mini danger-icon" title="Excluir movimentação" onClick={() => { void act(() => deleteReserveMovement(move.id), 'Movimentação excluída.'); }}><Trash2 size={14}/></button></td></tr>)}</tbody></table>{!movements.length && <TableEmpty text="Nenhuma movimentação de caixinha registrada."/>}</div></Panel>
-    <div className="info-note"><Activity size={17}/><span>O Nexo calcula rendimento composto por dia corrido usando a taxa anual informada. A atualização é feita quando você abre o sistema; se ficar alguns dias sem entrar, os dias anteriores são calculados na próxima abertura. É uma simulação e pode não incluir impostos, taxas ou regras específicas do banco.</span></div>
+    <Panel><PanelHeader title="Fechamentos mensais" subtitle="Compare a estimativa do NEXO com o saldo real informado. O ajuste fica registrado e passa a compor o saldo da caixinha."/><div className="table-scroll"><table><thead><tr><th>CAIXINHA</th><th>MÊS</th><th>ESTIMATIVA</th><th>VALOR REAL</th><th>DIFERENÇA</th></tr></thead><tbody>{closings.map((closing) => <tr key={closing.id}><td>{data.reserves.find((reserve) => reserve.id === closing.reserveId)?.name ?? '—'}</td><td>{monthBR(closing.month)}</td><td>{showValues ? money(closing.estimatedBalanceCents) : '••••'}</td><td><strong>{showValues ? money(closing.actualBalanceCents) : '••••'}</strong></td><td className={closing.differenceCents < 0 ? 'negative' : 'positive'}>{showValues ? money(closing.differenceCents) : '••••'}</td></tr>)}</tbody></table>{!closings.length && <TableEmpty text="Nenhum fechamento mensal registrado."/>}</div></Panel>
+    <Panel><PanelHeader title="Movimentações das caixinhas" subtitle="Depósitos, retiradas, rendimentos diários e ajustes de fechamento."/><div className="table-scroll"><table><thead><tr><th>CAIXINHA</th><th>TIPO</th><th>DATA</th><th>OBSERVAÇÕES</th><th>VALOR</th><th></th></tr></thead><tbody>{movements.map((move) => <tr key={move.id}><td>{data.reserves.find((reserve) => reserve.id === move.reserveId)?.name ?? '—'}</td><td>{move.type === 'deposit' ? 'Depósito' : move.type === 'withdrawal' ? 'Retirada' : move.type === 'adjustment' ? 'Ajuste de fechamento' : 'Rendimento'}</td><td>{dateBR(move.date)}</td><td>{move.notes ?? '—'}</td><td className={move.type === 'withdrawal' || (move.type === 'adjustment' && move.amountCents < 0) ? 'negative' : 'positive'}>{showValues ? money(move.amountCents) : '••••'}</td><td>{move.type !== 'adjustment' && <button className="icon-button mini danger-icon" title="Excluir movimentação" onClick={() => { void act(() => deleteReserveMovement(move.id), 'Movimentação excluída.'); }}><Trash2 size={14}/></button>}</td></tr>)}</tbody></table>{!movements.length && <TableEmpty text="Nenhuma movimentação de caixinha registrada."/>}</div></Panel>
+    <div className="info-note"><Activity size={17}/><span>O NEXO calcula rendimento composto somente em dias úteis do calendário bancário nacional, considerando fins de semana e feriados bancários. Ao fechar um mês, informe o saldo real: ele será salvo como saldo de referência, a diferença ficará registrada e os rendimentos posteriores serão recalculados a partir dele. Feriados estaduais e municipais podem variar e não estão incluídos.</span></div>
     {modal === 'new' && <ReserveModal editing={null} onClose={() => setModal(null)} act={act}/>}
     {modal && typeof modal === 'object' && modal.type === 'edit' && <ReserveModal editing={balances.find((item) => item.reserve.id === modal.id)?.reserve ?? null} onClose={() => setModal(null)} act={act}/>}
-    {modal && typeof modal === 'object' && modal.type !== 'edit' && <ReserveMovementModal reserveId={modal.id} type={modal.type} data={data} onClose={() => setModal(null)} act={act}/>}
+    {modal && typeof modal === 'object' && (modal.type === 'deposit' || modal.type === 'withdrawal') && <ReserveMovementModal reserveId={modal.id} type={modal.type} data={data} onClose={() => setModal(null)} act={act}/>}
+    {modal && typeof modal === 'object' && modal.type === 'closing' && <ReserveClosingModal reserveId={modal.id} reserveName={balances.find((item) => item.reserve.id === modal.id)?.reserve.name ?? 'Caixinha'} movements={movements} closings={closings} onClose={() => setModal(null)} act={act}/>}
   </>;
 }
+
 function ReserveModal({ editing, onClose, act }: { editing: Reserve | null; onClose: () => void; act: CommonProps['act'] }) {
   const [form, setForm] = useState({ name: editing?.name ?? '', target: fromCents(editing?.targetCents ?? 0), date: editing?.targetDate ?? '', notes: editing?.notes ?? '', annualYieldPercent: String(editing?.annualYieldPercent ?? 0) });
   const submit = () => act(() => saveReserve({ id: editing?.id, name: form.name, targetCents: toCents(form.target), targetDate: form.date || undefined, notes: form.notes, closed: editing?.closed ?? false, annualYieldPercent: Number(form.annualYieldPercent) }), editing ? 'Caixinha atualizada.' : 'Caixinha criada.').then((ok) => { if (ok) onClose(); });
@@ -739,6 +749,51 @@ function ReserveModal({ editing, onClose, act }: { editing: Reserve | null; onCl
     <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit}>{editing ? 'Salvar alterações' : 'Criar caixinha'}</Button></div>
   </div></Modal>;
 }
+function previousCompletedMonth() {
+  const date = new Date();
+  date.setDate(1);
+  date.setMonth(date.getMonth() - 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function ReserveClosingModal({ reserveId, reserveName, movements, closings, onClose, act }: {
+  reserveId: string;
+  reserveName: string;
+  movements: ReserveMovement[];
+  closings: ReserveClosing[];
+  onClose: () => void;
+  act: CommonProps['act'];
+}) {
+  const [form, setForm] = useState({ month: previousCompletedMonth(), actual: '' });
+  const existing = closings.find((item) => item.reserveId === reserveId && item.month === form.month);
+  const closingDate = `${form.month}-${String(daysInMonth(form.month)).padStart(2, '0')}`;
+  const estimatedCents = existing?.estimatedBalanceCents ?? movements
+    .filter((move) => move.reserveId === reserveId && move.date <= closingDate)
+    .reduce((sum, move) => sum + (move.type === 'withdrawal' ? -move.amountCents : move.amountCents), 0);
+  const actualCents = form.actual.trim() ? toCents(form.actual) : null;
+  const differenceCents = actualCents === null ? null : actualCents - estimatedCents;
+  useEffect(() => {
+    setForm((current) => ({
+      ...current,
+      actual: closings.find((item) => item.reserveId === reserveId && item.month === current.month)
+        ? fromCents(closings.find((item) => item.reserveId === reserveId && item.month === current.month)!.actualBalanceCents)
+        : '',
+    }));
+  }, [form.month, reserveId, closings]);
+  const submit = () => act(
+    () => saveReserveClosing({ reserveId, month: form.month, actualBalanceCents: toCents(form.actual) }),
+    `Fechamento de ${monthBR(form.month)} salvo. O saldo real passou a ser a referência da caixinha.`,
+  ).then((ok) => { if (ok) onClose(); });
+  return <Modal title={`Fechamento mensal · ${reserveName}`} onClose={onClose}><div className="form-grid">
+    <Field label="Mês de referência"><input type="month" max={previousCompletedMonth()} value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })}/></Field>
+    <Field label="Saldo real no último dia do mês (R$)"><MoneyInput value={form.actual} onChange={(actual) => setForm({ ...form, actual })}/></Field>
+    <div className="form-footnote" style={{ gridColumn: '1 / -1' }}><Activity size={15}/> Estimativa do NEXO para {monthBR(form.month)}: <strong>{money(estimatedCents)}</strong></div>
+    {differenceCents !== null && <div className="form-footnote" style={{ gridColumn: '1 / -1' }}>Diferença (valor real − estimativa): <strong className={differenceCents < 0 ? 'negative' : 'positive'}>{money(differenceCents)}</strong></div>}
+    <div className="form-footnote" style={{ gridColumn: '1 / -1' }}>O valor real informado será salvo como saldo da caixinha. O NEXO registra a diferença e recalcula os rendimentos posteriores. Fechamentos precisam ser feitos em ordem cronológica.</div>
+    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!/^\\d{4}-\\d{2}$/.test(form.month) || !form.actual.trim() || toCents(form.actual) < 0 || form.month >= today().slice(0, 7)}>Salvar valor real</Button></div>
+  </div></Modal>;
+}
+
 function ReserveMovementModal({ reserveId, type, data, onClose, act }: { reserveId: string; type: 'deposit' | 'withdrawal'; data: Snapshot; onClose: () => void; act: CommonProps['act'] }) {
   const [form, setForm] = useState({ amount: '', date: today(), notes: '' });
   const submit = () => act(() => moveReserve({ reserveId, type, amountCents: toCents(form.amount), date: form.date, notes: form.notes }), type === 'deposit' ? 'Aporte adicionado.' : 'Retirada registrada.').then((ok) => { if (ok) onClose(); });
