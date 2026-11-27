@@ -573,7 +573,6 @@ export async function importPurchasesFromJson(payload: unknown): Promise<{
   for (const [cardId, batchTotal] of creditTotals) {
     const card = cards.find((item) => item.id === cardId)!;
     const currentInstallments = await db.installments.where('cardId').equals(cardId).toArray();
-    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
     if (card.limitCents > 0 && batchTotal + currentCommitment > card.limitCents) {
       throw new Error('A importação excede o limite cadastrado do cartão ' + card.name + '. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
     }
