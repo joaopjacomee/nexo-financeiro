@@ -1,6 +1,6 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
-import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, isBrazilBankBusinessDay, splitInstallmentCents, FINANCIAL_START_MONTH } from './calculations';
+import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, isBrazilBankBusinessDay, splitInstallmentCents, FINANCIAL_START_MONTH, isTransactionVisibleByDate } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction, RecurringTransaction, RecurringFrequency, TransactionTemplate } from '../types';
 
 type SharedDebtInput = { id?: string; person: string; amountCents: number };
