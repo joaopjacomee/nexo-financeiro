@@ -745,7 +745,7 @@ function ReserveModal({ editing, onClose, act }: { editing: Reserve | null; onCl
     <Field label="Rendimento anual (%)"><input type="number" min="0" max="100" step="0.01" value={form.annualYieldPercent} onChange={(e) => setForm({ ...form, annualYieldPercent: e.target.value })}/></Field>
     <Field label="Prazo desejado"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}/></Field>
     <Field label="Observações" wide><textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></Field>
-    <div className="form-footnote"><Activity size={15}/> A taxa anual é convertida em taxa diária equivalente e aplicada ao saldo acumulado da caixinha.</div>
+    <div className="form-footnote"><Activity size={15}/> A taxa anual é convertida em taxa diária equivalente, considerando 252 dias úteis bancários, e aplicada ao saldo acumulado da caixinha.</div>
     <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit}>{editing ? 'Salvar alterações' : 'Criar caixinha'}</Button></div>
   </div></Modal>;
 }
@@ -765,9 +765,10 @@ function ReserveClosingModal({ reserveId, reserveName, movements, closings, onCl
   act: CommonProps['act'];
 }) {
   const [form, setForm] = useState({ month: previousCompletedMonth(), actual: '' });
-  const existing = closings.find((item) => item.reserveId === reserveId && item.month === form.month);
-  const closingDate = `${form.month}-${String(daysInMonth(form.month)).padStart(2, '0')}`;
-  const estimatedCents = existing?.estimatedBalanceCents ?? movements
+  const validMonth = /^\\d{4}-(0[1-9]|1[0-2])$/.test(form.month);
+  const existing = validMonth ? closings.find((item) => item.reserveId === reserveId && item.month === form.month) : undefined;
+  const closingDate = validMonth ? `${form.month}-${String(daysInMonth(form.month)).padStart(2, '0')}` : '';
+  const estimatedCents = !validMonth ? 0 : existing?.estimatedBalanceCents ?? movements
     .filter((move) => move.reserveId === reserveId && move.date <= closingDate)
     .reduce((sum, move) => sum + (move.type === 'withdrawal' ? -move.amountCents : move.amountCents), 0);
   const actualCents = form.actual.trim() ? toCents(form.actual) : null;
@@ -787,7 +788,7 @@ function ReserveClosingModal({ reserveId, reserveName, movements, closings, onCl
   return <Modal title={`Fechamento mensal · ${reserveName}`} onClose={onClose}><div className="form-grid">
     <Field label="Mês de referência"><input type="month" max={previousCompletedMonth()} value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })}/></Field>
     <Field label="Saldo real no último dia do mês (R$)"><MoneyInput value={form.actual} onChange={(actual) => setForm({ ...form, actual })}/></Field>
-    <div className="form-footnote" style={{ gridColumn: '1 / -1' }}><Activity size={15}/> Estimativa do NEXO para {monthBR(form.month)}: <strong>{money(estimatedCents)}</strong></div>
+    <div className="form-footnote" style={{ gridColumn: '1 / -1' }}><Activity size={15}/> Estimativa do NEXO para {validMonth ? monthBR(form.month) : '—'}: <strong>{money(estimatedCents)}</strong></div>
     {differenceCents !== null && <div className="form-footnote" style={{ gridColumn: '1 / -1' }}>Diferença (valor real − estimativa): <strong className={differenceCents < 0 ? 'negative' : 'positive'}>{money(differenceCents)}</strong></div>}
     <div className="form-footnote" style={{ gridColumn: '1 / -1' }}>O valor real informado será salvo como saldo da caixinha. O NEXO registra a diferença e recalcula os rendimentos posteriores. Fechamentos precisam ser feitos em ordem cronológica.</div>
     <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!/^\d{4}-\d{2}$/.test(form.month) || !form.actual.trim() || toCents(form.actual) < 0 || form.month >= today().slice(0, 7)}>Salvar valor real</Button></div>
