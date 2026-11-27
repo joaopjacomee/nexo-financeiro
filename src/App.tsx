@@ -502,7 +502,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const filtered = items.filter((item) =>
     (!typeFilters.length || typeFilters.includes(item.type)) &&
     (!categoryFilters.length || categoryFilters.includes(item.categoryId ?? 'uncategorized')) &&
-    (!statusFilters.length || (item.type === 'expense' && statusFilters.includes(item.expenseClass ?? 'Essencial'))) &&
+    (!statusFilters.length || item.type === 'income' || statusFilters.includes(item.expenseClass ?? 'Essencial')) &&
     `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase())
   ).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   const filteredInstallments = monthInstallments.filter((item) => {
@@ -572,6 +572,14 @@ function TransactionModal({ data, month, editing, privateSectionsUnlocked, onClo
   const initialDate = editing?.date ?? (currentDate.slice(0, 7) === month ? currentDate : `${month}-01`);
   const [type, setType] = useState<'income' | 'expense'>(editing?.type ?? 'expense');
   const [mode, setMode] = useState<Transaction['paymentMode']>(editing?.paymentMode ?? 'pix');
+  const paymentModeOptions: Array<{ value: Transaction['paymentMode']; label: string }> = [
+    { value: 'pix', label: 'Pix' },
+    { value: 'cash', label: 'Dinheiro' },
+    { value: 'card-debit', label: 'Cartão de débito' },
+    ...(type === 'expense' ? [{ value: 'card-credit' as const, label: 'Cartão de crédito' }] : []),
+    ...(type === 'expense' && privateSectionsUnlocked ? [{ value: 'reserve-plans' as const, label: 'Reserva de planos' }] : []),
+    { value: 'other', label: 'Outro' },
+  ];
   const existingSplits = editing ? data.debtors.filter((item) => item.sharedExpenseId === editing.id) : [];
   const knownPeople = Array.from(new Set(data.debtors.map((item) => item.person.trim()).filter(Boolean)));
   const [linkedDebts, setLinkedDebts] = useState<DebtLinkDraft[]>(existingSplits.map((item) => ({
@@ -590,7 +598,7 @@ function TransactionModal({ data, month, editing, privateSectionsUnlocked, onClo
     <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required value={purchaseDate} onChange={(e) => { setPurchaseDate(e.target.value); setFirstDueMonth(addMonths(e.target.value.slice(0, 7), 1)); }}/></Field>
     <Field label="Categoria"><select name="categoryId" defaultValue={editing?.categoryId ?? ''}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
     {type === 'expense' && <Field label="Classificação da despesa"><select name="expenseClass" value={expenseClass} onChange={(e) => setExpenseClass(e.target.value as NonNullable<Transaction['expenseClass']>)}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>}
-    <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="card-debit">Cartão débito</option>{type === 'expense' && <option value="card-credit">Cartão de crédito</option>}{type === 'expense' && privateSectionsUnlocked && <option value="reserve-plans">Reserva de planos</option>}<option value="other">Outro</option></select></Field>
+    <Field label="Forma de pagamento"><select name="paymentMode" value={mode} onChange={(e) => setMode(e.target.value as Transaction['paymentMode'])}>{paymentModeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
     <input type="hidden" name="sharedWith" value={type === 'expense' ? JSON.stringify(linkedDebts.filter((item) => item.person.trim() || item.amount.trim()).map((item) => ({ id: item.id, person: item.person, amountCents: toCents(item.amount) }))) : '[]'}/>
     {type === 'expense' && <DebtLinksEditor items={linkedDebts} onChange={setLinkedDebts} knownPeople={knownPeople} listId="nexo-transaction-debt-people"/>}
     {mode === 'card-credit' && type === 'expense' && <>
