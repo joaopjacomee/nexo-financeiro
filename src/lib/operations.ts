@@ -1033,6 +1033,101 @@ export async function createDebtor(input: Omit<Debtor, 'id' | 'createdAt' | 'lin
   );
 }
 
+export async function updateDebtor(input: {
+  id: string; person: string; description: string; originalCents: number; originDate: string;
+  dueDate?: string; categoryId?: string; notes?: string; originAccountId?: string;
+}) {
+  const debtor = await db.debtors.get(input.id);
+  if (!debtor) throw new Error('Lançamento de dívida não encontrado.');
+  const person = input.person.trim();
+  const description = input.description.trim();
+  if (!person || !description) throw new Error('Informe a pessoa e a descrição.');
+  if (!Number.isSafeInteger(input.originalCents) || input.originalCents <= 0) throw new Error('Informe um valor válido.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.originDate)) throw new Error('Informe uma data válida.');
+  if (input.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.dueDate)) throw new Error('Informe uma previsão de pagamento válida.');
+  if (input.categoryId && !(await db.categories.get(input.categoryId))) throw new Error('Categoria não encontrada.');
+  const payments = await db.debtorPayments.where('debtorId').equals(debtor.id).toArray();
+  const receivedCents = payments.reduce((sum, payment) => sum + payment.amountCents, 0);
+  if (input.originalCents < receivedCents) throw new Error('O valor original não pode ser menor que o que já foi recebido.');
+  const purchase = debtor.sharedPurchaseId ? await db.purchases.get(debtor.sharedPurchaseId) : undefined;
+  const isFamily = person.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR') === 'familia';
+  const updatedAt = new Date().toISOString();
+
+  if (purchase?.isDebtorCredit) {
+    const [card, currentInstallments] = await Promise.all([
+      db.cards.get(purchase.cardId),
+      db.installments.where('purchaseId').equals(purchase.id).toArray(),
+    ]);
+    if (!card || !currentInstallments.length) throw new Error('Não foi possível localizar o cartão ou as parcelas desta dívida.');
+    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+    const otherCommitment = (await db.installments.where('cardId').equals(card.id).toArray())
+      .filter((item) => item.purchaseId !== purchase.id)
+      .reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+    if (card.limitCents > 0 && input.originalCents - currentInstallments.reduce((sum, item) => sum + item.paidCents, 0) + otherCommitment > card.limitCents) {
+      throw new Error('O novo valor excede o limite disponível do cartão.');
+    }
+    const sorted = currentInstallments.sort((a, b) => a.number - b.number);
+    const amounts = splitInstallmentCents(input.originalCents, sorted.length);
+    for (let index = 0; index < amounts.length; index += 1) amounts[index] = Math.max(amounts[index], sorted[index].paidCents);
+    let excess = amounts.reduce((sum, amount) => sum + amount, 0) - input.originalCents;
+    for (let index = amounts.length - 1; index >= 0 && excess > 0; index -= 1) {
+      const available = amounts[index] - sorted[index].paidCents;
+      const reduction = Math.min(available, excess);
+      amounts[index] -= reduction;
+      excess -= reduction;
+    }
+    if (excess > 0) throw new Error('O novo valor não cobre as parcelas que já foram pagas.');
+    await db.transaction('rw', db.debtors, db.purchases, db.installments, db.months, async () => {
+      await db.debtors.update(debtor.id, {
+        person, description, originalCents: input.originalCents, originDate: input.originDate,
+        dueDate: input.dueDate || undefined, categoryId: input.categoryId, notes: input.notes?.trim() || undefined,
+      });
+      await db.purchases.update(purchase.id, {
+        description, totalCents: input.originalCents, purchaseDate: input.originDate,
+        categoryId: input.categoryId, notes: input.notes?.trim() || undefined, isFamilyDebt: isFamily,
+      });
+      await db.installments.bulkPut(sorted.map((item, index) => ({ ...item, amountCents: amounts[index] })));
+      await db.months.put({ id: input.originDate.slice(0, 7), month: input.originDate.slice(0, 7), createdAt: updatedAt });
+    });
+    return;
+  }
+
+  const transaction = debtor.linkedTransactionId ? await db.transactions.get(debtor.linkedTransactionId) : undefined;
+  if (debtor.linkedTransactionId && !transaction) throw new Error('A movimentação financeira vinculada não foi encontrada.');
+  if (transaction && ['pix', 'cash', 'card-debit'].includes(transaction.paymentMode)) {
+    const accountId = input.originAccountId || debtor.originAccountId;
+    if (!accountId || !(await db.accounts.get(accountId))) throw new Error('Selecione uma conta válida.');
+  }
+  const accountId = input.originAccountId || debtor.originAccountId;
+  await db.transaction('rw', db.debtors, db.transactions, db.months, db.reserveMovements, async () => {
+    await db.debtors.update(debtor.id, {
+      person, description, originalCents: input.originalCents, originDate: input.originDate,
+      dueDate: input.dueDate || undefined, categoryId: input.categoryId,
+      originAccountId: accountId, notes: input.notes?.trim() || undefined,
+    });
+    if (transaction) {
+      const nextTransaction = {
+        ...transaction,
+        description: `Empréstimo para ${person}: ${description}`,
+        amountCents: input.originalCents,
+        date: input.originDate,
+        month: input.originDate.slice(0, 7),
+        categoryId: input.categoryId,
+        accountId: ['pix', 'cash', 'card-debit'].includes(transaction.paymentMode) ? accountId : transaction.accountId,
+        notes: input.notes?.trim() || undefined,
+      };
+      await db.transactions.put(nextTransaction);
+      await db.months.put({ id: nextTransaction.month, month: nextTransaction.month, createdAt: updatedAt });
+      const linkedReserveMovement = await db.reserveMovements.filter((item) => item.linkedTransactionId === transaction.id).first();
+      if (linkedReserveMovement) await db.reserveMovements.update(linkedReserveMovement.id, {
+        amountCents: input.originalCents, date: input.originDate,
+        notes: `Empréstimo para ${person}: ${description}`,
+        availableBalanceImpactCents: -input.originalCents,
+      });
+    }
+  });
+}
+
 export async function receiveDebtorPayment(input: { debtorId: string; accountId: string; amountCents: number; date: string; notes?: string }) {
   const debtor = await db.debtors.get(input.debtorId);
   const [payments, account] = await Promise.all([db.debtorPayments.where('debtorId').equals(input.debtorId).toArray(), db.accounts.get(input.accountId)]);
