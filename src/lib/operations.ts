@@ -582,31 +582,69 @@ export async function deleteReserveMovement(movementId: string) {
 }
 
 export async function deleteAccount(accountId: string) {
-  const debtors = await db.debtors.where('originAccountId').equals(accountId).toArray();
-  for (const debtor of debtors) await deleteDebtor(debtor.id);
-  const [transactions, transfers, payments, debtorPayments, movements] = await Promise.all([
-    db.transactions.where('accountId').equals(accountId).toArray(),
-    db.transfers.toArray().then((items) => items.filter((item) => item.fromAccountId === accountId || item.toAccountId === accountId)),
-    db.invoicePayments.where('accountId').equals(accountId).toArray(),
-    db.debtorPayments.where('accountId').equals(accountId).toArray(),
-    db.investmentMovements.where('accountId').equals(accountId).toArray(),
-  ]);
-  for (const payment of payments) await deleteInvoicePayment(payment.id);
-  for (const payment of debtorPayments) await deleteDebtorPayment(payment.id);
-  const investmentIds = new Set(movements.map((item) => item.investmentId));
-  await db.transaction('rw', db.accounts, db.transactions, db.transfers, db.investmentMovements, db.investments, async () => {
-    await db.transactions.bulkDelete(transactions.map((item) => item.id));
-    await db.transfers.bulkDelete(transfers.map((item) => item.id));
-    await db.investmentMovements.bulkDelete(movements.map((item) => item.id));
-    for (const investmentId of investmentIds) {
-      const investment = await db.investments.get(investmentId);
-      if (!investment) continue;
-      const remaining = await db.investmentMovements.where('investmentId').equals(investmentId).toArray();
-      const balanceCents = remaining.reduce((sum, move) => sum + (move.type === 'contribution' ? move.amountCents : -move.amountCents), investment.initialCents);
-      await db.investments.update(investmentId, { balanceCents: Math.max(0, balanceCents) });
-    }
-    await db.accounts.delete(accountId);
-  });
+  // Delete all account-linked records in one Dexie transaction. Calling the
+  // individual delete helpers here opened nested transactions and could leave
+  // the account undeleted when a related record was present.
+  await db.transaction(
+    'rw',
+    db.accounts, db.transactions, db.transfers, db.invoicePayments, db.installments,
+    db.debtors, db.debtorPayments, db.investmentMovements, db.investments,
+    async () => {
+      const account = await db.accounts.get(accountId);
+      if (!account) return;
+
+      const [accountTransactions, transfers, invoicePayments, debtors, debtorPayments, investmentMovements] = await Promise.all([
+        db.transactions.where('accountId').equals(accountId).toArray(),
+        db.transfers.toArray().then((items) => items.filter((item) => item.fromAccountId === accountId || item.toAccountId === accountId)),
+        db.invoicePayments.where('accountId').equals(accountId).toArray(),
+        db.debtors.where('originAccountId').equals(accountId).toArray(),
+        db.debtorPayments.where('accountId').equals(accountId).toArray(),
+        db.investmentMovements.where('accountId').equals(accountId).toArray(),
+      ]);
+
+      const debtorIds = new Set(debtors.map((item) => item.id));
+      const relatedDebtorPayments = await db.debtorPayments.toArray().then((items) =>
+        items.filter((item) => debtorIds.has(item.debtorId) || item.accountId === accountId)
+      );
+      const linkedTransactionIds = [
+        ...debtors.map((item) => item.linkedTransactionId),
+        ...relatedDebtorPayments.map((item) => item.linkedTransactionId),
+      ].filter((id): id is string => Boolean(id));
+      const transactionIds = new Set([...accountTransactions.map((item) => item.id), ...linkedTransactionIds]);
+
+      for (const payment of invoicePayments) {
+        for (const allocation of payment.allocations ?? []) {
+          const installment = await db.installments.get(allocation.installmentId);
+          if (installment) {
+            await db.installments.update(installment.id, {
+              paidCents: Math.max(0, installment.paidCents - allocation.amountCents),
+            });
+          }
+        }
+      }
+
+      await db.transactions.bulkDelete([...transactionIds]);
+      await db.transfers.bulkDelete(transfers.map((item) => item.id));
+      await db.invoicePayments.bulkDelete(invoicePayments.map((item) => item.id));
+      await db.debtorPayments.bulkDelete(relatedDebtorPayments.map((item) => item.id));
+      await db.debtors.bulkDelete([...debtorIds]);
+      await db.investmentMovements.bulkDelete(investmentMovements.map((item) => item.id));
+
+      const affectedInvestmentIds = new Set(investmentMovements.map((item) => item.investmentId));
+      for (const investmentId of affectedInvestmentIds) {
+        const investment = await db.investments.get(investmentId);
+        if (!investment) continue;
+        const remaining = await db.investmentMovements.where('investmentId').equals(investmentId).toArray();
+        const balanceCents = remaining.reduce(
+          (sum, move) => sum + (move.type === 'contribution' ? move.amountCents : -move.amountCents),
+          investment.initialCents,
+        );
+        await db.investments.update(investmentId, { balanceCents: Math.max(0, balanceCents) });
+      }
+
+      await db.accounts.delete(accountId);
+    },
+  );
 }
 
 
