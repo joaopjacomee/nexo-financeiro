@@ -61,7 +61,7 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     throw new Error('Esta divisão já tem pagamentos. Remova ou ajuste os recebimentos antes de desfazer a divisão.');
   }
 
-  await db.transaction('rw', db.transactions, db.months, db.debtors, db.debtorPayments, db.reserves, db.reserveMovements, async () => {
+  await db.transaction('rw', [db.transactions, db.months, db.debtors, db.debtorPayments, db.reserves, db.reserveMovements], async () => {
     if (existingReserveMovement) await db.reserveMovements.delete(existingReserveMovement.id);
     const transactionValue: Transaction = {
       ...value,
