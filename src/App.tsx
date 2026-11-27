@@ -40,7 +40,7 @@ const navGroups: { title: string; items: { key: PageKey; label: string; icon: ty
   { title: 'VISÃO GERAL', items: [{ key: 'dashboard', label: 'Início', icon: LayoutDashboard }, { key: 'months', label: 'Meses', icon: CalendarRange }] },
   { title: 'MOVIMENTAÇÕES', items: [{ key: 'transactions', label: 'Movimentações', icon: ArrowLeftRight }, { key: 'categories', label: 'Categorias', icon: Layers3 }] },
   { title: 'CONTAS E CARTÕES', items: [{ key: 'accounts', label: 'Contas bancárias', icon: Landmark }, { key: 'cards', label: 'Cartões', icon: CreditCard }, { key: 'invoices', label: 'Faturas', icon: Receipt }, { key: 'installments', label: 'Parcelamentos', icon: CalendarDays }] },
-  { title: 'ORGANIZAÇÃO', items: [{ key: 'debtors', label: 'Devedores', icon: HandCoins }, { key: 'reserves', label: 'Caixinhas', icon: Goal }, { key: 'wishlist', label: 'Lista de desejo', icon: ShoppingBag }] },
+  { title: 'ORGANIZAÇÃO', items: [{ key: 'debtors', label: 'Devedores', icon: HandCoins }, { key: 'reserves', label: 'Caixinhas', icon: Goal }, { key: 'wishlist', label: 'Lista de desejos', icon: ShoppingBag }] },
   { title: 'ANÁLISES', items: [{ key: 'reports', label: 'Relatórios', icon: FileBarChart }, { key: 'forecast', label: 'Previsões', icon: Activity }, { key: 'patrimony', label: 'Patrimônio', icon: Wallet }] },
   { title: 'SISTEMA', items: [{ key: 'settings', label: 'Configurações', icon: Settings }] },
 ];
@@ -48,7 +48,7 @@ const pageTitles: Record<PageKey, string> = {
   dashboard: 'Visão geral', months: 'Organização mensal', transactions: 'Movimentações', categories: 'Categorias',
   accounts: 'Contas bancárias', cards: 'Cartões', invoices: 'Faturas', installments: 'Parcelamentos', debtors: 'Devedores',
   reserves: 'Minhas caixinhas', reports: 'Relatórios',
-  forecast: 'Previsão financeira', patrimony: 'Patrimônio', settings: 'Configurações', wishlist: 'Lista de desejo',
+  forecast: 'Previsão financeira', patrimony: 'Patrimônio', settings: 'Configurações', wishlist: 'Lista de desejos',
 };
 const COLORS = ['#6d28d9', '#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe', '#ede9fe', '#7c3aed', '#5b21b6'];
 const PRIVATE_SECTIONS_SESSION_KEY = 'nexo-private-sections-unlocked';
@@ -248,9 +248,9 @@ export default function App() {
           {page === 'cards' && <CardsPage {...common}/>}
           {page === 'invoices' && <InvoicesPage {...common}/>}
           {page === 'installments' && <InstallmentsPage {...common}/>}
-          {page === 'debtors' && <DebtorsPage {...common}/>}
+          {page === 'debtors' && privateSectionsUnlocked && <DebtorsPage {...common}/ >}
           {page === 'reserves' && <ReservesPage {...common}/>}
-          {page === 'wishlist' && <WishlistPage {...common}/>}
+          {page === 'wishlist' && privateSectionsUnlocked && <WishlistPage {...common}/ >}
           {page === 'reports' && <ReportsPage {...common}/>}
           {page === 'forecast' && <ForecastPage {...common}/>}
           {page === 'patrimony' && <PatrimonyPage {...common}/>}
@@ -855,7 +855,7 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
     setMessage('Áreas privadas desbloqueadas nesta aba do navegador.');
   };
   return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/>
-    <Panel><div className="settings-icon lavender"><ShieldCheck size={20}/></div><h3>Áreas privadas</h3><p>Devedores e Lista de desejo ficam ocultos até que você informe seu código de acesso. O desbloqueio vale somente para esta aba do navegador.</p>
+    <Panel><div className="settings-icon lavender"><ShieldCheck size={20}/></div><h3>Áreas privadas</h3><p>Devedores e Lista de desejo ficam ocultos até que você informe seu código de acesso. O desbloqueio vale somente para esta aba do navegador. Este bloqueio esconde as telas, mas não substitui uma autenticação real nem criptografa os dados locais.</p>
       {privateSectionsUnlocked
         ? <div className="settings-actions"><span className="status-pill status-received">Áreas privadas ativadas nesta aba</span><Button variant="secondary" onClick={() => { onUnlockPrivateSections(false); setMessage('Áreas privadas bloqueadas novamente.'); }}>Bloquear áreas privadas</Button></div>
         : <div className="settings-actions"><Field label="Código de acesso"><input type="password" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }} autoComplete="off" placeholder="Digite o código de acesso" maxLength={32}/></Field><Button onClick={submitAccessCode} disabled={!accessCode.trim()}>Ativar áreas privadas</Button></div>}
