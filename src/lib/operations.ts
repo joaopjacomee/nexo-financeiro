@@ -261,7 +261,7 @@ export async function receiveDebtorPayment(input: { debtorId: string; accountId:
   const paymentTransaction: Transaction = {
     id: linkedTransactionId,
     type: 'income',
-    description: `Pagamento ${debtor.person}`,
+    description: `Pagamento - ${debtor.person}`,
     amountCents: input.amountCents,
     date: input.date,
     month: input.date.slice(0, 7),
