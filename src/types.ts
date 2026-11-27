@@ -63,4 +63,4 @@ export interface CdiRate { id: string; date: string; annualRate: number; source:
 export interface CdiAccrual { id: string; investmentId: ID; date: string; rateDaily: number; amountCents: number; balanceAfterCents: number; }
 export interface Setting { key: string; value: unknown; }
 
-export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'calendar' | 'forecast' | 'patrimony' | 'settings' | 'wishlist';
+export type PageKey = 'dashboard' | 'months' | 'transactions' | 'categories' | 'accounts' | 'cards' | 'invoices' | 'installments' | 'debtors' | 'reserves' | 'reports' | 'forecast' | 'patrimony' | 'settings' | 'wishlist';
