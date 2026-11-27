@@ -255,7 +255,7 @@ export function TransactionTemplatesPage({ data, revision, showValues, act }: Ex
   }), 'Movimentação criada a partir do modelo.');
   return <>
     <Heading eyebrow="ORGANIZAÇÃO" title="Modelos de movimentação" description="Guarde contas e receitas frequentes com suas informações e registre-as novamente com um toque."/>
-    <Panel><div className="panel-header"><div><h3>Novo modelo</h3><p></p></div><Bookmark size={19}/></div>
+    <Panel><div className="panel-header"><div><h3>Novo modelo</h3></div><Bookmark size={19}/></div>
       <div className="form-grid">
         {field('Nome do modelo', <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex.: Conta de internet"/>)}
         {field('Tipo', <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as 'income' | 'expense' })}><option value="expense">Saída</option><option value="income">Entrada</option></select>)}
