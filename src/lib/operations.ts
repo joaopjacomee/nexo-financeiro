@@ -72,7 +72,7 @@ export async function saveTransaction(input: Omit<Transaction, 'id' | 'createdAt
     if (plansReserve) await db.reserveMovements.add({
       id: makeId(), reserveId: plansReserve.id, type: 'withdrawal', amountCents: transactionInput.amountCents,
       date: transactionInput.date, notes: `Despesa: ${transactionInput.description.trim()}`, linkedTransactionId: transactionValue.id,
-      availableBalanceImpactCents: 0,
+      availableBalanceImpactCents: -transactionInput.amountCents,
     });
     await db.months.put({ id: value.month, month: value.month, createdAt: new Date().toISOString() });
 
