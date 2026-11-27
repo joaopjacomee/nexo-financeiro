@@ -88,6 +88,7 @@ async function restoreHistorySnapshot(snapshot: HistorySnapshot) {
 
 export default function App() {
   const [page, setPage] = useState<PageKey>('dashboard');
+  const [openNewTransaction, setOpenNewTransaction] = useState(false);
   const [month, setMonth] = useState(firstUsageMonth());
   const [showValues, setShowValues] = useState(true);
   const [mobileNav, setMobileNav] = useState(false);
@@ -217,6 +218,7 @@ export default function App() {
     if (!enabled && (page === 'debtors' || page === 'wishlist')) setPage('dashboard');
   };
   const common = { data: snapshot, month, setMonth, showValues, revision, refresh, act, query };
+  const openTransactionForm = () => { setPage('transactions'); setOpenNewTransaction(true); setMobileNav(false); };
 
   if (!ready) return <div className="loading-screen"><div className="brand-mark">N</div><strong>Preparando seu espaço financeiro</strong><span>Inicializando o armazenamento local…</span></div>;
 
@@ -240,9 +242,9 @@ export default function App() {
           <div className="topbar-actions"><div className="privacy-status"><span className="privacy-dot"/> Somente neste dispositivo</div><button className="icon-button history-action" onClick={() => void undoLastAction()} disabled={!canUndo} title="Desfazer última ação" aria-label="Desfazer última ação"><Undo2 size={18}/></button><button className="icon-button history-action" onClick={() => void redoLastAction()} disabled={!canRedo} title="Refazer última ação" aria-label="Refazer última ação"><Redo2 size={18}/></button><button className="icon-button" onClick={() => setShowValues((value) => !value)} title={showValues ? 'Ocultar valores' : 'Mostrar valores'}>{showValues ? <Eye size={18}/> : <EyeOff size={18}/>}</button><button className="icon-button" onClick={() => navigate('settings')} title="Configurações"><Settings size={18}/></button><div className="top-avatar">NP</div></div>
         </header>
         <div className="page-content">
-          {page === 'dashboard' && <Dashboard {...common} navigate={navigate}/>}
+          {page === 'dashboard' && <Dashboard {...common} navigate={navigate} onNewTransaction={openTransactionForm}/>}
           {page === 'months' && <MonthsPage {...common}/>}
-          {page === 'transactions' && <TransactionsPage {...common}/>}
+          {page === 'transactions' && <TransactionsPage {...common} openNewRequested={openNewTransaction} onNewRequestHandled={() => setOpenNewTransaction(false)}/>}
           {page === 'categories' && <CategoriesPage {...common}/>}
           {page === 'accounts' && <AccountsPage {...common}/>}
           {page === 'cards' && <CardsPage {...common}/>}
@@ -324,7 +326,7 @@ function Modal({ title, children, onClose, width = 'medium' }: { title: string; 
 function EmptyState({ icon: Icon = FolderOpen, title, text, action }: { icon?: typeof FolderOpen; title: string; text: string; action?: ReactNode }) { return <div className="empty-state"><div className="empty-icon"><Icon size={23}/></div><strong>{title}</strong><p>{text}</p>{action}</div>; }
 function TableEmpty({ text }: { text: string }) { return <div className="table-empty">{text}</div>; }
 
-function Dashboard({ data, month, setMonth, showValues, revision, navigate }: CommonProps & { navigate: (key: PageKey) => void }) {
+function Dashboard({ data, month, setMonth, showValues, revision, navigate, onNewTransaction }: CommonProps & { navigate: (key: PageKey) => void; onNewTransaction: () => void }) {
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof getMonthSummary>> | null>(null);
   const [recent, setRecent] = useState<Transaction[]>([]);
   useEffect(() => {
@@ -337,7 +339,7 @@ function Dashboard({ data, month, setMonth, showValues, revision, navigate }: Co
   const expenses = (summary?.cashExpensesCents ?? 0) + (summary?.installmentsCents ?? 0);
   return <>
     <div className="welcome-row"><div><div className="eyebrow">{monthBR(month).toUpperCase()}</div><h2>Seu dinheiro, <span>em ordem.</span></h2><p>Um resumo simples das suas movimentações.</p></div>
-      <div className="welcome-actions"><MonthSelector month={month} setMonth={setMonth}/><Button onClick={() => navigate('transactions')}><Plus size={16}/> Nova movimentação</Button></div>
+      <div className="welcome-actions"><MonthSelector month={month} setMonth={setMonth}/><Button onClick={onNewTransaction}><Plus size={16}/> Nova movimentação</Button></div>
     </div>
     <div className="stat-grid stat-grid-three">
       <StatCard label="Receitas" value={money(summary?.incomeCents ?? 0)} icon={ArrowDownLeft} tone="green" hidden={!showValues}/>
@@ -396,7 +398,7 @@ function MonthsPage({ data, month, setMonth, showValues, revision, refresh, act 
   </>;
 }
 
-function TransactionsPage({ data, month, setMonth, showValues, revision, refresh, act, query }: CommonProps) {
+function TransactionsPage({ data, month, setMonth, showValues, revision, refresh, act, query, openNewRequested, onNewRequestHandled }: CommonProps & { openNewRequested: boolean; onNewRequestHandled: () => void }) {
   const [items, setItems] = useState<Transaction[]>([]);
   const [modal, setModal] = useState(false);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
@@ -404,6 +406,12 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Transaction | null>(null);
+  useEffect(() => {
+    if (!openNewRequested) return;
+    setEditing(null);
+    setModal(true);
+    onNewRequestHandled();
+  }, [openNewRequested, onNewRequestHandled]);
   useEffect(() => {
     db.transactions.where('month').equals(month).sortBy('date')
       .then((rows) => setItems(rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))));
@@ -855,10 +863,10 @@ function SettingsPage({ act, privateSectionsUnlocked, onUnlockPrivateSections }:
     setMessage('Áreas privadas desbloqueadas nesta aba do navegador.');
   };
   return <><PageHeading eyebrow="PRIVACIDADE E DADOS" title="Configurações e backup" description="Gerencie a segurança dos seus dados, exporte cópias e restaure o sistema."/>
-    <Panel><div className="settings-icon lavender"><ShieldCheck size={20}/></div><h3>Áreas privadas</h3><p>Devedores e Lista de desejo ficam ocultos até que você informe seu código de acesso. O desbloqueio vale somente para esta aba do navegador. Este bloqueio esconde as telas, mas não substitui uma autenticação real nem criptografa os dados locais.</p>
+    <Panel>
       {privateSectionsUnlocked
-        ? <div className="settings-actions"><span className="status-pill status-received">Áreas privadas ativadas nesta aba</span><Button variant="secondary" onClick={() => { onUnlockPrivateSections(false); setMessage('Áreas privadas bloqueadas novamente.'); }}>Bloquear áreas privadas</Button></div>
-        : <div className="settings-actions"><Field label="Código de acesso"><input type="password" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }} autoComplete="off" placeholder="Digite o código de acesso" maxLength={32}/></Field><Button onClick={submitAccessCode} disabled={!accessCode.trim()}>Ativar áreas privadas</Button></div>}
+        ? <div className="settings-actions"><span className="status-pill status-received">Ativado</span><Button variant="secondary" onClick={() => { onUnlockPrivateSections(false); setMessage('Bloqueado.'); }}>Bloquear</Button></div>
+        : <div className="settings-actions"><Field label="CODIGO"><input type="password" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }} autoComplete="off" placeholder="CODIGO" maxLength={32}/></Field><Button onClick={submitAccessCode} disabled={!accessCode.trim()}>Ativar</Button></div>}
     </Panel>
     <div className="settings-grid"><Panel><div className="settings-icon purple"><Download size={20}/></div><h3>Backup dos dados</h3><p>Exporte suas informações em JSON para guardar uma cópia completa das contas, movimentações, cartões, parcelas, devedores, reservas e CDI.</p><div className="settings-actions"><Button onClick={() => void exportFile(false)}><Download size={15}/> Exportar JSON</Button></div></Panel><Panel><div className="settings-icon green"><ShieldCheck size={20}/></div><h3>Backup criptografado</h3><p>Use uma senha para proteger o arquivo com AES-GCM e derivação de chave PBKDF2. A senha não é salva pelo Nexo.</p><Field label="Senha (mínimo 8 caracteres)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Defina uma senha forte"/></Field><div className="settings-actions"><Button variant="secondary" onClick={() => void exportFile(true)} disabled={password.length < 8}>Exportar criptografado</Button></div></Panel><Panel><div className="settings-icon lavender"><Upload size={20}/></div><h3>Restaurar backup</h3><p>Importe um JSON exportado pelo Nexo. A restauração mescla registros e evita duplicatas por identificador.</p><Field label="Senha do backup criptografado (se aplicável)"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)}/></Field><label className="btn btn-secondary file-button"><Upload size={15}/> Selecionar arquivo<input type="file" accept=".json,application/json" onChange={(e) => void importFile(e.target.files?.[0])}/></label></Panel><Panel><div className="settings-icon pink"><Smartphone size={20}/></div><h3>Privacidade e armazenamento</h3><p>Seus dados ficam no IndexedDB deste navegador e não são enviados para um servidor. O armazenamento local não é automaticamente criptografado.</p><ul className="settings-list"><li>Não armazene senhas bancárias ou números completos de cartões.</li><li>Limpar os dados do navegador pode apagar suas informações.</li><li>Faça backups periódicos e guarde uma cópia fora do dispositivo.</li><li>O modo offline depende do primeiro carregamento completo da aplicação.</li></ul></Panel></div><Panel><div className="settings-icon pink"><Trash2 size={20}/></div><h3>Apagar dados de teste</h3><p>Remove os registros deste navegador e recria apenas os cadastros iniciais vazios. Faça um backup antes, caso queira conservar alguma informação.</p><div className="settings-actions"><Button variant="danger" onClick={() => { void act(() => clearTestData(), 'Os dados de teste foram apagados e os cadastros vazios foram recriados.'); }}>Apagar todos os dados</Button></div></Panel>{message && <div className="info-note"><Check size={17}/><span>{message}</span><button className="icon-button mini" onClick={() => setMessage('')}><X size={14}/></button></div>}<Panel className="about-panel"><PanelHeader title="Sobre o Nexo"/><div className="about-grid"><div><span>Versão</span><strong>1.0.0</strong></div><div><span>Banco de dados</span><strong>IndexedDB · Dexie.js</strong></div><div><span>Hospedagem</span><strong>GitHub Pages</strong></div><div><span>Arquitetura</span><strong>100% navegador</strong></div></div></Panel></>;
 }
