@@ -15,6 +15,7 @@ import {
   FINANCIAL_START_MONTH,
   isMonthInAccountingPeriod,
   isExpenseInAccountingPeriod,
+  isTransactionVisibleByDate,
 } from '../.tmp-tests/calculations.js';
 
 test('divisão de compra em seis parcelas preserva o total', () => {
@@ -131,4 +132,14 @@ test('calendário bancário brasileiro exclui fins de semana e feriados móveis 
   assert.equal(isBrazilBankBusinessDay('2026-11-20'), false); // Consciência Negra
   assert.equal(isBrazilBankBusinessDay('2026-12-31'), false); // sem expediente bancário ao público
   assert.equal(isBrazilBankBusinessDay('2026-02-30'), false); // data inválida
+});
+
+
+test('movimentações e receitas com data válida aparecem na data prevista', () => {
+  assert.equal(isTransactionVisibleByDate('2026-11-27', '2026-11-27'), true);
+  assert.equal(isTransactionVisibleByDate('2026-12-15', '2026-11-14'), false);
+  assert.equal(isTransactionVisibleByDate('2026-12-15', '2026-11-15'), true);
+  assert.equal(isTransactionVisibleByDate('2026-12-15', '2026-12-15'), true);
+  assert.equal(isTransactionVisibleByDate('inválida', '2026-12-15'), false);
+  assert.equal(isTransactionVisibleByDate('2026-12-15', 'inválida'), false);
 });

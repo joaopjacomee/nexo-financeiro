@@ -153,7 +153,7 @@ export function isExpenseInAccountingPeriod(date: string): boolean {
 
 /** A future movement becomes visible exactly one calendar month before its date. */
 export function isTransactionVisibleByDate(date: string, referenceDate: string): boolean {
-  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date) || !/^\\d{4}-\\d{2}-\\d{2}$/.test(referenceDate)) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{4}-\d{2}-\d{2}$/.test(referenceDate)) return false;
   if (date <= referenceDate) return true;
   const [year, month, day] = date.split('-').map(Number);
   const previousMonth = new Date(Date.UTC(year, month - 2, 1));
