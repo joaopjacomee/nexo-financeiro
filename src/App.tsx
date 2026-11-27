@@ -305,10 +305,65 @@ function MultiSelectFilter({ label, allLabel, options, selected, onChange }: {
 function PageHeading({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) {
   return <div className="page-heading"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h2>{title}</h2>{description && <p>{description}</p>}</div>{action && <div className="heading-action">{action}</div>}</div>;
 }
-function normalizedMoneyInput(value: string) {
-  if (!value.trim()) return '';
+function evaluateMoneyExpression(value: string): string {
+  const source = value.trim();
+  if (!source) return '';
+  const isExpression = source.startsWith('=') || /[+*/()]/.test(source) || /-/.test(source);
+  if (!isExpression) return normalizedPlainMoney(source);
+  const expression = (source.startsWith('=') ? source.slice(1) : source).replace(/\\s+/g, '').replace(/,/g, '.');
+  let position = 0;
+  const parseNumber = (): number => {
+    const match = expression.slice(position).match(/^(?:\\d+(?:\\.\\d*)?|\\.\\d+)/);
+    if (!match) throw new Error('Confira a fórmula do valor. Ex.: =35,90/5 ou 40*3.');
+    position += match[0].length;
+    const number = Number(match[0]);
+    if (!Number.isFinite(number)) throw new Error('A fórmula contém um número inválido.');
+    return number;
+  };
+  const parseFactor = (): number => {
+    if (expression[position] === '+') { position += 1; return parseFactor(); }
+    if (expression[position] === '-') { position += 1; return -parseFactor(); }
+    if (expression[position] === '(') {
+      position += 1;
+      const result = parseSum();
+      if (expression[position] !== ')') throw new Error('Feche os parênteses da fórmula.');
+      position += 1;
+      return result;
+    }
+    return parseNumber();
+  };
+  const parseProduct = (): number => {
+    let result = parseFactor();
+    while (expression[position] === '*' || expression[position] === '/') {
+      const operator = expression[position++];
+      const next = parseFactor();
+      if (operator === '/' && next === 0) throw new Error('Não é possível dividir por zero.');
+      result = operator === '*' ? result * next : result / next;
+    }
+    return result;
+  };
+  const parseSum = (): number => {
+    let result = parseProduct();
+    while (expression[position] === '+' || expression[position] === '-') {
+      const operator = expression[position++];
+      const next = parseProduct();
+      result = operator === '+' ? result + next : result - next;
+    }
+    return result;
+  };
+  if (!expression) throw new Error('Digite uma fórmula depois do sinal de igual.');
+  const result = parseSum();
+  if (position !== expression.length || !Number.isFinite(result) || result < 0 || result > 999999999999) {
+    throw new Error('Fórmula inválida ou resultado fora do limite permitido.');
+  }
+  return fromCents(Math.round(result * 100));
+}
+function normalizedPlainMoney(value: string) {
   const cents = toCents(value);
   return Number.isSafeInteger(cents) ? fromCents(cents) : value;
+}
+function normalizedMoneyInput(value: string) {
+  return evaluateMoneyExpression(value);
 }
 function MoneyInput({ name, value, defaultValue, onChange, onBlur, required = false, placeholder = '0,00', className }: { name?: string; value?: string; defaultValue?: string; onChange?: (value: string) => void; onBlur?: (value: string) => void; required?: boolean; placeholder?: string; className?: string }) {
   const blur = (event: FocusEvent<HTMLInputElement>) => {
@@ -460,7 +515,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     return a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt);
   });
   const submit = async (payload: FormData) => {
-    const raw = String(payload.get('amount') ?? '');
+    const raw = evaluateMoneyExpression(String(payload.get('amount') ?? ''));
     const type = String(payload.get('type')) as 'income' | 'expense';
     const paymentMode = String(payload.get('paymentMode')) as Transaction['paymentMode'];
     const categoryId = String(payload.get('categoryId') || '') || undefined;
@@ -510,7 +565,7 @@ function TransactionModal({ data, month, editing, privateSectionsUnlocked, onClo
   return <Modal title={editing ? 'Editar movimentação' : 'Nova movimentação'} onClose={onClose}><form className="form-grid" onSubmit={onFormSubmit}>
     <Field label="Tipo"><select name="type" value={type} onChange={(e) => { const next = e.target.value as 'income' | 'expense'; setType(next); if (next === 'income' && mode === 'card-credit') setMode('pix'); }}><option value="expense">Despesa</option><option value="income">Receita</option></select></Field>
     <Field label="Descrição" wide><input name="description" required defaultValue={editing?.description}/></Field>
-    <Field label="Valor total da conta (R$)"><MoneyInput name="amount" required value={amount} onChange={setAmount}/></Field>
+    <Field label="Valor total da conta (R$)"><MoneyInput name="amount" required value={amount} onChange={setAmount}/><small className="subline">Use fórmulas como =35,90/5 ou 40*3. Aceita +, −, ×, ÷ e parênteses; o resultado é calculado ao sair do campo.</small></Field>
     <Field label={mode === 'card-credit' ? 'Data da compra' : 'Data'}><input name="date" type="date" required value={purchaseDate} onChange={(e) => { setPurchaseDate(e.target.value); setFirstDueMonth(addMonths(e.target.value.slice(0, 7), 1)); }}/></Field>
     <Field label="Categoria"><select name="categoryId" defaultValue={editing?.categoryId ?? ''}><option value="">Sem categoria</option>{data.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
     {type === 'expense' && <Field label="Classificação da despesa"><select name="expenseClass" value={expenseClass} onChange={(e) => setExpenseClass(e.target.value as NonNullable<Transaction['expenseClass']>)}><option value="Investimento">Investimento</option><option value="Essencial">Essencial</option><option value="Supérfluo">Supérfluo</option></select></Field>}
