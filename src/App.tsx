@@ -450,7 +450,12 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const movementRows = [
     ...filtered.map((item) => ({ kind: 'transaction' as const, item, date: item.date, createdAt: item.createdAt })),
     ...filteredInstallments.map((item) => ({ kind: 'installment' as const, item, date: item.dueDate, createdAt: data.purchases.find((purchase) => purchase.id === item.purchaseId)?.createdAt ?? '' })),
-  ].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  ].sort((a, b) => {
+    const aType = a.kind === 'transaction' ? a.item.type : 'expense';
+    const bType = b.kind === 'transaction' ? b.item.type : 'expense';
+    if (aType !== bType) return aType === 'expense' ? -1 : 1;
+    return a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt);
+  });
   const submit = async (payload: FormData) => {
     const raw = String(payload.get('amount') ?? '');
     const type = String(payload.get('type')) as 'income' | 'expense';
