@@ -409,6 +409,7 @@ function MonthsPage({ data, month, setMonth, showValues, revision, refresh, act 
 
 function TransactionsPage({ data, month, setMonth, showValues, revision, refresh, act, query, privateSectionsUnlocked, openNewRequested, onNewRequestHandled }: CommonProps & { privateSectionsUnlocked: boolean; openNewRequested: boolean; onNewRequestHandled: () => void }) {
   const [items, setItems] = useState<Transaction[]>([]);
+  const [monthInstallments, setMonthInstallments] = useState<Installment[]>([]);
   const [modal, setModal] = useState(false);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
@@ -422,8 +423,13 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     onNewRequestHandled();
   }, [openNewRequested, onNewRequestHandled]);
   useEffect(() => {
-    db.transactions.where('month').equals(month).sortBy('date')
-      .then((rows) => setItems(rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))));
+    Promise.all([
+      db.transactions.where('month').equals(month).toArray(),
+      getInstallmentsForMonth(month),
+    ]).then(([rows, installments]) => {
+      setItems(rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)));
+      setMonthInstallments(installments);
+    });
   }, [month, revision]);
   const filtered = items.filter((item) =>
     (!typeFilters.length || typeFilters.includes(item.type)) &&
@@ -431,6 +437,18 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     (!statusFilters.length || (item.type === 'expense' && statusFilters.includes(item.expenseClass ?? 'Essencial'))) &&
     `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase())
   ).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  const filteredInstallments = monthInstallments.filter((item) => {
+    const purchase = data.purchases.find((entry) => entry.id === item.purchaseId);
+    const text = `${purchase?.description ?? ''} ${purchase?.notes ?? ''}`.toLowerCase();
+    return (!typeFilters.length || typeFilters.includes('expense')) &&
+      (!categoryFilters.length || categoryFilters.includes(purchase?.categoryId ?? 'uncategorized')) &&
+      (!statusFilters.length || statusFilters.includes(purchase?.expenseClass ?? 'Essencial')) &&
+      text.includes((search || query).toLowerCase());
+  });
+  const movementRows = [
+    ...filtered.map((item) => ({ kind: 'transaction' as const, item, date: item.date, createdAt: item.createdAt })),
+    ...filteredInstallments.map((item) => ({ kind: 'installment' as const, item, date: item.dueDate, createdAt: data.purchases.find((purchase) => purchase.id === item.purchaseId)?.createdAt ?? '' })),
+  ].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   const submit = async (payload: FormData) => {
     const raw = String(payload.get('amount') ?? '');
     const type = String(payload.get('type')) as 'income' | 'expense';
@@ -455,7 +473,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
       <MultiSelectFilter label="Tipo" allLabel="Todos os tipos" options={[{ value: 'income', label: 'Receitas' }, { value: 'expense', label: 'Despesas' }]} selected={typeFilters} onChange={setTypeFilters}/>
       <MultiSelectFilter label="Categoria" allLabel="Todas as categorias" options={[{ value: 'uncategorized', label: 'Sem categoria' }, ...data.categories.map((category) => ({ value: category.id, label: category.name }))]} selected={categoryFilters} onChange={setCategoryFilters}/>
       <MultiSelectFilter label="Classificação" allLabel="Todas as classificações" options={[{ value: 'Investimento', label: 'Investimento' }, { value: 'Essencial', label: 'Essencial' }, { value: 'Supérfluo', label: 'Supérfluo' }]} selected={statusFilters} onChange={setStatusFilters}/>
-    </div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>CLASSIFICAÇÃO</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}{data.debtors.find((debtor) => debtor.sharedExpenseId === item.id) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedExpenseId === item.id)?.person}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : item.paymentMode === 'reserve-plans' ? 'Reserva de planos' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <span className="status-pill">{item.expenseClass ?? 'Essencial'}</span>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { void act(() => deleteTransaction(item.id)); }}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!filtered.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
+    </div></div><div className="table-scroll"><table><thead><tr><th>DESCRIÇÃO</th><th>CATEGORIA</th><th>CONTA / MEIO</th><th>DATA</th><th>CLASSIFICAÇÃO</th><th>VALOR</th><th>AÇÕES</th></tr></thead><tbody>{movementRows.map((row) => row.kind === 'transaction' ? (() => { const item = row.item; return <tr key={item.id}><td><div className="table-title"><span className={`tx-type-icon ${item.type}`}>{item.type === 'income' ? <ArrowDownLeft size={14}/> : <ArrowUpRight size={14}/>}</span><div><strong>{item.description}</strong>{item.notes && <small>{item.notes}</small>}{data.debtors.find((debtor) => debtor.sharedExpenseId === item.id) && <small className="subline">Dividida com {data.debtors.find((debtor) => debtor.sharedExpenseId === item.id)?.person}</small>}</div></div></td><td>{data.categories.find((cat) => cat.id === item.categoryId)?.name ?? '—'}</td><td>{accountName(item.accountId)} <small className="subline">{item.paymentMode === 'pix' ? 'Pix' : item.paymentMode === 'cash' ? 'Dinheiro' : item.paymentMode === 'card-debit' ? 'Cartão débito' : item.paymentMode === 'card-credit' ? 'Cartão de crédito' : item.paymentMode === 'reserve-plans' ? 'Reserva de planos' : 'Outro'}</small></td><td>{dateBR(item.date)}</td><td>{item.type === 'income' ? <span className="status-pill status-received">Receita</span> : <span className="status-pill">{item.expenseClass ?? 'Essencial'}</span>}</td><td className={item.type === 'income' ? 'positive' : 'negative'}>{showValues ? money(item.amountCents) : '••••'}</td><td><div className="row-actions"><button className="icon-button mini" title="Editar" onClick={() => { setEditing(item); setModal(true); }}><Settings size={14}/></button><button className="icon-button mini danger-icon" title="Excluir" onClick={() => { void act(() => deleteTransaction(item.id)); }}><Trash2 size={14}/></button></div></td></tr>; })() : (() => { const installment = row.item; const purchase = data.purchases.find((entry) => entry.id === installment.purchaseId); const card = data.cards.find((entry) => entry.id === installment.cardId); return <tr key={`installment-${installment.id}`}><td><div className="table-title"><span className="tx-type-icon expense"><CreditCard size={14}/></span><div><strong>{purchase?.description ?? 'Compra parcelada'}</strong><small className="subline">Parcela {installment.number}/{installment.count}</small></div></div></td><td>{data.categories.find((cat) => cat.id === purchase?.categoryId)?.name ?? '—'}</td><td>{card?.name ?? 'Cartão'}<small className="subline">Cartão de crédito</small></td><td>{dateBR(installment.dueDate)}</td><td><span className="status-pill">{purchase?.expenseClass ?? 'Essencial'}</span></td><td className="negative">{showValues ? money(installment.amountCents) : '••••'}</td><td><span className="subline">Parcela</span></td></tr>; })())}</tbody></table>{!movementRows.length && <TableEmpty text="Nenhuma movimentação encontrada para os filtros selecionados."/>}</div></Panel>
     {modal && <TransactionModal data={data} month={month} editing={editing} privateSectionsUnlocked={privateSectionsUnlocked} onClose={() => { setModal(false); setEditing(null); }} onSubmit={submit}/> }
   </>;
 }
