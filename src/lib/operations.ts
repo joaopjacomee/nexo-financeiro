@@ -519,7 +519,7 @@ export async function importPurchasesFromJson(payload: unknown): Promise<{
   const debtorRows: Array<{
     id: string; person: string; description: string; originalCents: number; originDate: string;
     categoryId?: string; originalPayment?: string; originAccountId?: string;
-    notes?: string; linkedTransactionId?: string; sharedExpenseId?: string; sharedPurchaseId?: string; createdAt: string;
+    notes?: string; sharedExpenseId?: string; sharedPurchaseId?: string; createdAt: string;
   }> = [];
   const reserveMovementRows: Array<{
     id: string; reserveId: string; type: 'withdrawal'; amountCents: number; date: string;
@@ -529,7 +529,6 @@ export async function importPurchasesFromJson(payload: unknown): Promise<{
   entries.forEach((entry, index) => {
     const recordId = idPrefix + (legacyCreditOnly ? '-' : '-r-') + (index + 1);
     let linkedPurchaseId: string | undefined;
-    let linkedTransactionId: string | undefined;
     if (entry.mode === 'card-credit') {
       const purchaseId = recordId;
       linkedPurchaseId = purchaseId;
@@ -552,7 +551,6 @@ export async function importPurchasesFromJson(payload: unknown): Promise<{
       });
     } else {
       const transactionId = recordId;
-      linkedTransactionId = transactionId;
       const reserveId = entry.mode === 'reserve-plans' ? plansReserve?.id : undefined;
       transactionRows.push({
         id: transactionId, type: entry.type, description: entry.description, amountCents: entry.totalCents,
@@ -579,7 +577,7 @@ export async function importPurchasesFromJson(payload: unknown): Promise<{
         : 'Compra para ' + link.person + ': ' + entry.description,
       originalCents: link.amountCents, originDate: entry.purchaseDate, categoryId: entry.categoryId,
       originalPayment: modeLabel(entry.mode), originAccountId: entry.accountId,
-      notes: entry.notes, linkedTransactionId, sharedExpenseId: linkedTransactionId,
+      notes: entry.notes, sharedExpenseId: linkedPurchaseId ? undefined : recordId,
       sharedPurchaseId: linkedPurchaseId, createdAt,
     }));
   });
