@@ -409,6 +409,164 @@ export async function importCardPurchasesFromJson(payload: unknown): Promise<{
   };
 }
 
+
+/**
+ * Update a credit purchase and regenerate its installment schedule.
+ * Existing payment allocations are kept attached to their installment IDs.
+ */
+export async function updateCardPurchase(input: {
+  id: string; description: string; totalCents: number; cardId: string;
+  categoryId?: string; expenseClass?: Transaction['expenseClass'];
+  purchaseDate: string; firstDueMonth: string; installmentsCount: number;
+  notes?: string; sharedWith?: { person: string; amountCents: number };
+}) {
+  const purchase = await db.purchases.get(input.id);
+  if (!purchase) throw new Error('Compra parcelada não encontrada.');
+  if (!input.description.trim()) throw new Error('Informe a descrição da compra.');
+  if (!Number.isSafeInteger(input.totalCents) || input.totalCents <= 0) throw new Error('Valor da compra inválido.');
+  if (!Number.isInteger(input.installmentsCount) || input.installmentsCount < 1 || input.installmentsCount > 240) {
+    throw new Error('Quantidade de parcelas inválida (1 a 240).');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.purchaseDate) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(input.firstDueMonth)) {
+    throw new Error('Confira a data da compra e o mês da primeira fatura.');
+  }
+  const card = await db.cards.get(input.cardId);
+  if (!card) throw new Error('Cartão não encontrado.');
+  if (input.categoryId && !(await db.categories.get(input.categoryId))) throw new Error('Categoria não encontrada.');
+  if (input.expenseClass && !['Investimento', 'Essencial', 'Supérfluo'].includes(input.expenseClass)) {
+    throw new Error('Classificação da despesa inválida.');
+  }
+  if (input.sharedWith && (!Number.isSafeInteger(input.sharedWith.amountCents)
+    || input.sharedWith.amountCents <= 0 || input.sharedWith.amountCents > input.totalCents)) {
+    throw new Error('O valor a receber precisa ser maior que zero e não pode superar o total da compra.');
+  }
+
+  const currentInstallments = (await db.installments.where('purchaseId').equals(purchase.id).toArray())
+    .sort((a, b) => a.number - b.number);
+  if (!currentInstallments.length) throw new Error('As parcelas desta compra não foram encontradas.');
+  const hasPayments = currentInstallments.some((item) => item.paidCents > 0);
+  const scheduleChanged = input.cardId !== purchase.cardId
+    || input.installmentsCount !== currentInstallments.length
+    || input.firstDueMonth !== purchase.firstDueMonth;
+  if (hasPayments && scheduleChanged) {
+    throw new Error('Esta compra já tem parcelas pagas. Para preservar os pagamentos, não altere o cartão, a quantidade de parcelas ou o mês da primeira fatura.');
+  }
+
+  const existingDebtor = await db.debtors.filter((item) => item.sharedPurchaseId === purchase.id).first();
+  const debtorPayments = existingDebtor
+    ? await db.debtorPayments.where('debtorId').equals(existingDebtor.id).toArray()
+    : [];
+  const receivedCents = debtorPayments.reduce((sum, item) => sum + item.amountCents, 0);
+  const normalizePerson = (value: string) => value.trim().toLocaleLowerCase('pt-BR');
+  const allDebtors = await db.debtors.toArray();
+  const personRecord = input.sharedWith
+    ? allDebtors.find((item) => normalizePerson(item.person) === normalizePerson(input.sharedWith!.person))
+    : undefined;
+  if (input.sharedWith && !personRecord) throw new Error('Selecione uma pessoa já cadastrada em Devedores.');
+  if (existingDebtor && receivedCents > 0 && !input.sharedWith) {
+    throw new Error('Esta dívida já recebeu pagamentos. Não é possível remover o vínculo até ajustar os recebimentos.');
+  }
+  if (existingDebtor && input.sharedWith && receivedCents > 0
+    && normalizePerson(existingDebtor.person) !== normalizePerson(personRecord!.person)) {
+    throw new Error('Esta dívida já recebeu pagamentos. Não é possível trocar a pessoa vinculada.');
+  }
+  if (input.sharedWith && receivedCents > input.sharedWith.amountCents) {
+    throw new Error('O valor devido não pode ser menor que o que já foi recebido.');
+  }
+
+  const paidByNumber = currentInstallments.map((item) => item.paidCents);
+  const totalPaidCents = paidByNumber.reduce((sum, value) => sum + value, 0);
+  if (input.totalCents < totalPaidCents) {
+    throw new Error('O novo valor da compra não pode ser menor que o total já pago nas faturas.');
+  }
+  const amounts = splitInstallmentCents(input.totalCents, input.installmentsCount);
+  if (hasPayments) {
+    for (let index = 0; index < amounts.length; index += 1) {
+      amounts[index] = Math.max(amounts[index], paidByNumber[index] ?? 0);
+    }
+    let excess = amounts.reduce((sum, value) => sum + value, 0) - input.totalCents;
+    for (let index = amounts.length - 1; index >= 0 && excess > 0; index -= 1) {
+      const available = amounts[index] - (paidByNumber[index] ?? 0);
+      const reduction = Math.min(available, excess);
+      amounts[index] -= reduction;
+      excess -= reduction;
+    }
+    if (excess > 0) throw new Error('O novo valor não cobre os pagamentos já feitos em cada parcela.');
+  }
+
+  const newPurchase = {
+    ...purchase,
+    description: input.description.trim(),
+    totalCents: input.totalCents,
+    cardId: card.id,
+    categoryId: input.categoryId,
+    expenseClass: input.expenseClass,
+    purchaseDate: input.purchaseDate,
+    firstDueMonth: input.firstDueMonth,
+    installmentsCount: input.installmentsCount,
+    notes: input.notes?.trim() || undefined,
+  };
+  const installmentRows = amounts.map((amountCents, index) => {
+    const previous = currentInstallments[index];
+    const dueMonth = monthOffset(input.firstDueMonth, index);
+    const day = Math.min(card.dueDay, daysInMonth(dueMonth));
+    return {
+      id: previous?.id ?? makeId(),
+      purchaseId: purchase.id,
+      cardId: card.id,
+      number: index + 1,
+      count: input.installmentsCount,
+      amountCents,
+      paidCents: previous?.paidCents ?? 0,
+      dueMonth,
+      dueDate: dueMonth + '-' + String(day).padStart(2, '0'),
+    };
+  });
+  const oldIds = new Set(currentInstallments.map((item) => item.id));
+  const newIds = new Set(installmentRows.map((item) => item.id));
+  const removedIds = [...oldIds].filter((id) => !newIds.has(id));
+
+  const targetCardInstallments = await db.installments.where('cardId').equals(card.id).toArray();
+  const otherCommitments = targetCardInstallments
+    .filter((item) => item.purchaseId !== purchase.id)
+    .reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+  const newCommitment = installmentRows.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+  if (card.limitCents > 0 && otherCommitments + newCommitment > card.limitCents) {
+    throw new Error('A alteração excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - otherCommitments) / 100).toFixed(2) + '.');
+  }
+
+  const now = new Date().toISOString();
+  await db.transaction('rw', db.purchases, db.installments, db.months, db.debtors, db.debtorPayments, async () => {
+    await db.purchases.put(newPurchase);
+    if (removedIds.length) await db.installments.bulkDelete(removedIds);
+    await db.installments.bulkPut(installmentRows);
+    const months = [...new Set(installmentRows.map((item) => item.dueMonth))]
+      .map((month) => ({ id: month, month, createdAt: now }));
+    await db.months.bulkPut(months);
+
+    if (input.sharedWith && personRecord) {
+      const updatedDebtor: Debtor = {
+        id: existingDebtor?.id ?? makeId(),
+        person: personRecord.person.trim(),
+        description: 'Divisão da conta: ' + newPurchase.description,
+        originalCents: input.sharedWith.amountCents,
+        originDate: input.purchaseDate,
+        categoryId: input.categoryId,
+        originalPayment: 'Cartão de crédito',
+        notes: newPurchase.notes,
+        sharedPurchaseId: purchase.id,
+        createdAt: existingDebtor?.createdAt ?? now,
+      };
+      await db.debtors.put(updatedDebtor);
+    } else if (existingDebtor) {
+      await db.debtorPayments.where('debtorId').equals(existingDebtor.id).delete();
+      await db.debtors.delete(existingDebtor.id);
+    }
+  });
+
+  return newPurchase;
+}
+
 export async function payInvoice(input: { cardId: string; accountId: string; month: string; amountCents: number; date: string }) {
   if (input.month < FINANCIAL_START_MONTH || input.date < `${FINANCIAL_START_MONTH}-01`) throw new Error('O controle de faturas começa em dezembro de 2026.');
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor de pagamento válido.');
