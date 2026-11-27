@@ -348,7 +348,7 @@ export async function processReserveYields(referenceDate = today()) {
 }
 
 export async function saveReserveClosing(input: { reserveId: string; month: string; actualBalanceCents: number }): Promise<ReserveClosing> {
-  if (!/^\\d{4}-\\d{2}$/.test(input.month)) throw new Error('Selecione um mês válido.');
+  if (!/^\d{4}-\d{2}$/.test(input.month)) throw new Error('Selecione um mês válido.');
   if (!Number.isSafeInteger(input.actualBalanceCents) || input.actualBalanceCents < 0) throw new Error('Informe um saldo real válido.');
   if (input.month >= today().slice(0, 7)) throw new Error('O fechamento só pode ser feito depois que o mês terminar.');
 
@@ -527,7 +527,7 @@ export async function restoreBackup(payload: unknown, replace = false) {
   if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3) throw new Error('Arquivo de backup inválido ou versão não suportada.');
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
-    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
+    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
     'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
   const data = payload as Record<string, unknown>;
@@ -751,7 +751,7 @@ export async function saveWishlistInitialBalance(initialCents: number) {
 export async function createWishlistPurchase(input: { description: string; amountCents: number; date: string; notes?: string }) {
   if (!input.description.trim()) throw new Error('Informe o nome da compra desejada.');
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Informe um valor de compra válido.');
-  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(input.date)) throw new Error('Informe uma data válida.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new Error('Informe uma data válida.');
   await db.wishlistPurchases.add({ id: makeId(), ...input, description: input.description.trim(), createdAt: new Date().toISOString() });
 }
 
@@ -762,7 +762,7 @@ export async function deleteWishlistPurchase(purchaseId: string) {
 export async function clearTestData() {
   const tables = [
     'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
-    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'monthlyBudgets', 'months', 'investments',
+    'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
     'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
   ] as const;
   await db.transaction('rw', tables.map((name) => db.table(name)), async () => {

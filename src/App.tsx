@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
-import { dateBR, daysInMonth, firstUsageMonth, fromCents, makeId, money, monthBR, monthOffset, today, toCents } from './lib/format';
+import { dateBR, daysInMonth, firstUsageMonth, fromCents, makeId, money, monthBR, today, toCents } from './lib/format';
 import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod } from './lib/calculations';
 import {
   getAccountBalances, getCardMetrics, getCategorySpend, getDebtorMetrics, getInstallmentsForMonth,
@@ -790,7 +790,7 @@ function ReserveClosingModal({ reserveId, reserveName, movements, closings, onCl
     <div className="form-footnote" style={{ gridColumn: '1 / -1' }}><Activity size={15}/> Estimativa do NEXO para {monthBR(form.month)}: <strong>{money(estimatedCents)}</strong></div>
     {differenceCents !== null && <div className="form-footnote" style={{ gridColumn: '1 / -1' }}>Diferença (valor real − estimativa): <strong className={differenceCents < 0 ? 'negative' : 'positive'}>{money(differenceCents)}</strong></div>}
     <div className="form-footnote" style={{ gridColumn: '1 / -1' }}>O valor real informado será salvo como saldo da caixinha. O NEXO registra a diferença e recalcula os rendimentos posteriores. Fechamentos precisam ser feitos em ordem cronológica.</div>
-    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!/^\\d{4}-\\d{2}$/.test(form.month) || !form.actual.trim() || toCents(form.actual) < 0 || form.month >= today().slice(0, 7)}>Salvar valor real</Button></div>
+    <div className="form-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={submit} disabled={!/^\d{4}-\d{2}$/.test(form.month) || !form.actual.trim() || toCents(form.actual) < 0 || form.month >= today().slice(0, 7)}>Salvar valor real</Button></div>
   </div></Modal>;
 }
 
