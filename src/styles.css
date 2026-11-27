@@ -122,3 +122,64 @@
 .classification-report-total{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:13px;padding-top:13px;border-top:1px solid #eee8f6;font-size:11px;color:#80758d}
 .classification-report-total strong{font-size:14px;color:var(--text);font-variant-numeric:tabular-nums}
 @media(max-width:700px){.classification-report-list{grid-template-columns:1fr;gap:9px}.classification-report-row{padding:12px}}
+
+
+/* Financial calendar, recurring movements, comparison and protected templates. */
+.header-clock{display:flex;flex-direction:column;gap:2px;padding-left:15px;margin-left:14px;border-left:1px solid #eee8f5;white-space:nowrap}
+.header-clock strong{font:800 14px system-ui;color:#5d4376;font-variant-numeric:tabular-nums}
+.header-clock span{font-size:9px;color:#93889e;text-transform:capitalize}
+.recurring-editor{margin-bottom:14px}
+.recurring-editor .panel-header>svg{color:#7c3aed}
+.financial-calendar-panel{padding:16px}
+.calendar-weekdays,.financial-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.calendar-weekdays{margin-bottom:7px}
+.calendar-weekdays span{text-align:center;font-size:10px;font-weight:700;color:#8f8599;padding:7px 0}
+.calendar-day,.calendar-blank{min-height:74px;border-radius:10px}
+.calendar-day{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:8px;border:1px solid #f0ebf5;background:#fff;color:#5d4c6e;text-align:left;cursor:pointer}
+.calendar-day:hover{border-color:#bfa9e0;background:#fbf8ff}
+.calendar-day.selected{border-color:#8b5cf6;background:#f5efff;box-shadow:0 0 0 2px #eee5ff}
+.calendar-day.is-today>strong{display:grid;place-items:center;width:23px;height:23px;background:#7c3aed;color:#fff;border-radius:50%}
+.calendar-day>strong{font-size:12px}
+.calendar-day>small{font-size:8px;color:#968ba1}
+.calendar-day-dots{display:flex;gap:3px;flex-wrap:wrap;min-height:6px}
+.calendar-dot{width:6px;height:6px;border-radius:50%;background:#8b5cf6}
+.calendar-dot.income,.event-marker.income{background:#19a776}
+.calendar-dot.expense,.event-marker.expense{background:#df6686}
+.calendar-dot.installment,.event-marker.installment{background:#e5a33d}
+.calendar-dot.reserve,.event-marker.reserve{background:#9a83c7}
+.comparison-period-label{display:flex;align-items:center;gap:9px;margin:0 0 12px;color:#8f859b;font-size:11px}
+.comparison-period-label strong{color:#5d4376}
+.comparison-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.comparison-metric{display:flex;flex-direction:column;gap:8px;min-width:0}
+.comparison-metric>span{font-size:10px;color:#8f859b}
+.comparison-metric>strong{font-size:19px;color:#554267;font-variant-numeric:tabular-nums}
+.comparison-metric>small{font-size:9px}
+.comparison-bars{height:7px;display:flex;gap:3px;overflow:hidden;border-radius:9px;background:#f2edf7}
+.comparison-bars i{height:100%;border-radius:9px;background:#b8a0df}
+.comparison-bars i:last-child{background:#7c3aed}
+.comparison-small-labels{display:flex;justify-content:space-between;color:#a198aa}
+.template-list{display:grid}
+.template-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:13px 2px;border-bottom:1px solid #f0ebf5}
+.template-row:last-child{border-bottom:0}
+.template-main{display:flex;flex-direction:column;gap:5px;min-width:0}
+.template-main strong{font-size:11px;color:#5a486c}
+.template-main span{font-size:9px;color:#968ba1;overflow-wrap:anywhere}
+.template-row>strong{font-size:12px;white-space:nowrap}
+.template-actions{display:flex;align-items:center;gap:6px}
+@media(max-width:980px){.comparison-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.header-clock{margin-left:9px;padding-left:10px}}
+@media(max-width:700px){
+  .header-clock{gap:1px;margin-left:6px;padding-left:7px}
+  .header-clock strong{font-size:11px}
+  .header-clock span{font-size:7px;max-width:80px;overflow:hidden;text-overflow:ellipsis}
+  .calendar-day,.calendar-blank{min-height:54px}
+  .calendar-day{padding:5px;gap:4px;border-radius:7px}
+  .calendar-day>strong{font-size:10px}
+  .calendar-day>small{font-size:7px}
+  .calendar-weekdays,.financial-calendar-grid{gap:3px}
+  .financial-calendar-panel{padding:10px 8px}
+  .comparison-metric-grid{gap:8px}
+  .comparison-metric{padding:12px 10px}
+  .comparison-metric>strong{font-size:15px}
+  .template-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}
+  .template-actions{grid-column:1/-1;justify-content:flex-end}
+}

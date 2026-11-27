@@ -4,12 +4,12 @@ import {
   CalendarRange, Check, ChevronLeft, ChevronRight, CreditCard, Download, Eye, EyeOff, FileBarChart,
   FileText, FolderOpen, Gauge, Goal, HandCoins, Landmark, Layers3, LayoutDashboard, Menu, Plus,
   Search, Settings, ShieldCheck, Smartphone, Target, TrendingDown, TrendingUp, Wallet, X, Upload, Pencil,
-  PiggyBank, Receipt, CircleHelp, Trash2, Undo2, Redo2, ShoppingBag,
+  PiggyBank, Receipt, CircleHelp, Trash2, Undo2, Redo2, ShoppingBag, Repeat2, GitCompareArrows, Bookmark,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
 import { dateBR, daysInMonth, firstUsageMonth, fromCents, makeId, money, monthBR, today, toCents } from './lib/format';
-import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod } from './lib/calculations';
+import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate } from './lib/calculations';
 import {
   getAccountBalances, getCardMetrics, getCategorySpend, getDebtorMetrics, getInstallmentsForMonth,
   getMonthSummary, getPatrimony, getReserveBalances,
@@ -18,8 +18,9 @@ import {
   clearTestData, createCardPurchase, createDebtor, createTransfer, createWishlistPurchase, decryptBackup,
   deleteAccount, deleteCard, deleteCategory, deleteDebtor, deleteDebtorPayment, deleteInvoicePayment,
   deletePurchase, deleteReserve, deleteReserveMovement, deleteTransaction, deleteTransfer, deleteWishlistPurchase, encryptBackup, exportBackup, moveReserve, saveReserveClosing,
-  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importPurchasesFromJson, updateCardPurchase,
+  payInvoice, processReserveYields, receiveDebtorPayment, restoreBackup, saveAccount, saveCard, saveReserve, saveTransaction, saveWishlistInitialBalance, importPurchasesFromJson, updateCardPurchase, syncRecurringTransactions,
 } from './lib/operations';
+import { FinancialCalendarPage, MonthComparisonPage, RecurringTransactionsPage, TransactionTemplatesPage } from './FinanceExtras';
 import type {
   Account,
   Card,
@@ -38,15 +39,15 @@ import type {
   WishlistPurchase,
 } from './types';
 const navGroups: { title: string; items: { key: PageKey; label: string; icon: typeof LayoutDashboard }[] }[] = [
-  { title: 'VISÃO GERAL', items: [{ key: 'dashboard', label: 'Início', icon: LayoutDashboard }, { key: 'months', label: 'Meses', icon: CalendarRange }] },
-  { title: 'MOVIMENTAÇÕES', items: [{ key: 'transactions', label: 'Movimentações', icon: ArrowLeftRight }, { key: 'categories', label: 'Categorias', icon: Layers3 }] },
+  { title: 'VISÃO GERAL', items: [{ key: 'dashboard', label: 'Início', icon: LayoutDashboard }, { key: 'months', label: 'Meses', icon: CalendarRange }, { key: 'calendar', label: 'Calendário financeiro', icon: CalendarDays }] },
+  { title: 'MOVIMENTAÇÕES', items: [{ key: 'transactions', label: 'Movimentações', icon: ArrowLeftRight }, { key: 'recurring', label: 'Recorrentes', icon: Repeat2 }, { key: 'categories', label: 'Categorias', icon: Layers3 }] },
   { title: 'CONTAS E CARTÕES', items: [{ key: 'accounts', label: 'Contas bancárias', icon: Landmark }, { key: 'cards', label: 'Cartões', icon: CreditCard }, { key: 'invoices', label: 'Faturas', icon: Receipt }, { key: 'installments', label: 'Parcelamentos', icon: CalendarDays }] },
   { title: 'ORGANIZAÇÃO', items: [{ key: 'debtors', label: 'Devedores', icon: HandCoins }, { key: 'reserves', label: 'Caixinhas', icon: Goal }, { key: 'wishlist', label: 'Lista de desejos', icon: ShoppingBag }] },
-  { title: 'ANÁLISES', items: [{ key: 'reports', label: 'Relatórios', icon: FileBarChart }, { key: 'forecast', label: 'Previsões', icon: Activity }, { key: 'patrimony', label: 'Patrimônio', icon: Wallet }] },
-  { title: 'SISTEMA', items: [{ key: 'settings', label: 'Configurações', icon: Settings }] },
+  { title: 'ANÁLISES', items: [{ key: 'reports', label: 'Relatórios', icon: FileBarChart }, { key: 'comparison', label: 'Comparativo mensal', icon: GitCompareArrows }, { key: 'forecast', label: 'Previsões', icon: Activity }, { key: 'patrimony', label: 'Patrimônio', icon: Wallet }] },
+  { title: 'SISTEMA', items: [{ key: 'settings', label: 'Configurações', icon: Settings }, { key: 'templates', label: 'Modelos de movimentação', icon: Bookmark }] },
 ];
 const pageTitles: Record<PageKey, string> = {
-  dashboard: 'Visão geral', months: 'Organização mensal', transactions: 'Movimentações', categories: 'Categorias',
+  dashboard: 'Visão geral', months: 'Organização mensal', calendar: 'Calendário financeiro', transactions: 'Movimentações', recurring: 'Movimentações recorrentes', comparison: 'Comparativo entre meses', templates: 'Modelos de movimentação', categories: 'Categorias',
   accounts: 'Contas bancárias', cards: 'Cartões', invoices: 'Faturas', installments: 'Parcelamentos', debtors: 'Devedores',
   reserves: 'Minhas caixinhas', reports: 'Relatórios',
   forecast: 'Previsão financeira', patrimony: 'Patrimônio', settings: 'Configurações', wishlist: 'Lista de desejos',
@@ -64,7 +65,7 @@ const emptySnapshot: Snapshot = { categories: [], accounts: [], cards: [], trans
 const HISTORY_TABLES = [
   'categories', 'accounts', 'cards', 'transactions', 'purchases', 'installments', 'invoicePayments', 'transfers',
   'debtors', 'debtorPayments', 'reserves', 'reserveMovements', 'reserveClosings', 'monthlyBudgets', 'months', 'investments',
-  'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases',
+  'investmentMovements', 'cdiRates', 'cdiAccruals', 'settings', 'wishlistPurchases', 'recurringTransactions', 'transactionTemplates',
 ] as const;
 type HistoryTableName = typeof HISTORY_TABLES[number];
 type HistorySnapshot = Record<HistoryTableName, unknown[]>;
@@ -116,6 +117,11 @@ export default function App() {
   const historyBusy = useRef(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [currentClock, setCurrentClock] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentClock(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   useEffect(() => {
@@ -124,6 +130,7 @@ export default function App() {
       try {
         await initializeDatabase();
         await processReserveYields();
+        await syncRecurringTransactions();
         const [categories, accounts, cards, transactions, purchases, debtors, reserves, months, setting] = await Promise.all([
           db.categories.orderBy('sortOrder').toArray(), db.accounts.toArray(), db.cards.toArray(), db.transactions.toArray(),
           db.purchases.toArray(), db.debtors.toArray(), db.reserves.toArray(), db.months.orderBy('month').reverse().toArray(),
@@ -209,7 +216,7 @@ export default function App() {
     } finally { historyBusy.current = false; }
   };
   const navigate = (key: PageKey) => {
-    if (!privateSectionsUnlocked && (key === 'debtors' || key === 'wishlist')) {
+    if (!privateSectionsUnlocked && (key === 'debtors' || key === 'wishlist' || key === 'templates')) {
       setPage('settings');
       setMobileNav(false);
       setToast({ message: 'Ative as áreas privadas nas Configurações para acessá-las.', kind: 'error' });
@@ -225,7 +232,7 @@ export default function App() {
       window.sessionStorage.removeItem(PRIVATE_SECTIONS_SESSION_KEY);
     } catch { /* The in-memory access state still works for this open page. */ }
     setPrivateSectionsUnlocked(enabled);
-    if (!enabled && (page === 'debtors' || page === 'wishlist')) setPage('dashboard');
+    if (!enabled && (page === 'debtors' || page === 'wishlist' || page === 'templates')) setPage('dashboard');
   };
   const common = { data: snapshot, month, setMonth, showValues, revision, refresh, act, query };
   const openTransactionForm = () => { setPage('transactions'); setOpenNewTransaction(true); setMobileNav(false); };
@@ -238,7 +245,7 @@ export default function App() {
         <div className="brand-lockup"><div className="brand-mark">N</div><div><strong>nexo</strong><span>FINANÇAS PESSOAIS</span></div><button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="Fechar menu"><X size={18}/></button></div>
         <div className="profile-card"><div className="profile-avatar">NP</div><div><strong>Meu espaço</strong><span>Dados neste dispositivo</span></div><ShieldCheck size={16} className="profile-shield"/></div>
         <nav className="side-nav">
-          {navGroups.map((group) => <section key={group.title} className="nav-group"><div className="nav-group-title">{group.title}</div>{group.items.filter((item) => privateSectionsUnlocked || (item.key !== 'debtors' && item.key !== 'wishlist')).map((item) => {
+          {navGroups.map((group) => <section key={group.title} className="nav-group"><div className="nav-group-title">{group.title}</div>{group.items.filter((item) => privateSectionsUnlocked || (item.key !== 'debtors' && item.key !== 'wishlist' && item.key !== 'templates')).map((item) => {
             const Icon = item.icon;
             return <button key={item.key} className={`nav-item ${page === item.key ? 'active' : ''}`} onClick={() => navigate(item.key)}><Icon size={17}/><span>{item.label}</span>{item.key === 'dashboard' && <i className="nav-dot"/>}</button>;
           })}</section>)}
@@ -248,13 +255,17 @@ export default function App() {
       {mobileNav && <button className="mobile-scrim" onClick={() => setMobileNav(false)} aria-label="Fechar navegação"/>}
       <main className="main-area">
         <header className="topbar">
-          <div className="topbar-left"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Abrir menu"><Menu size={20}/></button><div><div className="breadcrumb">ESPAÇO FINANCEIRO <ChevronRight size={12}/> <span>{pageTitles[page].toUpperCase()}</span></div><h1>{pageTitles[page]}</h1></div></div>
+          <div className="topbar-left"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Abrir menu"><Menu size={20}/></button><div><div className="breadcrumb">ESPAÇO FINANCEIRO <ChevronRight size={12}/> <span>{pageTitles[page].toUpperCase()}</span></div><h1>{pageTitles[page]}</h1></div><div className="header-clock" aria-live="off"><strong>{currentClock.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</strong><span>{currentClock.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}</span></div></div>
           <div className="topbar-actions"><div className="privacy-status"><span className="privacy-dot"/> Somente neste dispositivo</div><button className="icon-button history-action" onClick={() => void undoLastAction()} disabled={!canUndo} title="Desfazer última ação" aria-label="Desfazer última ação"><Undo2 size={18}/></button><button className="icon-button history-action" onClick={() => void redoLastAction()} disabled={!canRedo} title="Refazer última ação" aria-label="Refazer última ação"><Redo2 size={18}/></button><button className="icon-button" onClick={() => setShowValues((value) => !value)} title={showValues ? 'Ocultar valores' : 'Mostrar valores'}>{showValues ? <Eye size={18}/> : <EyeOff size={18}/>}</button><button className="icon-button" onClick={() => navigate('settings')} title="Configurações"><Settings size={18}/></button><div className="top-avatar">NP</div></div>
         </header>
         <div className="page-content">
           {page === 'dashboard' && <Dashboard {...common} navigate={navigate} onNewTransaction={openTransactionForm}/>}
           {page === 'months' && <MonthsPage {...common}/>}
+          {page === 'calendar' && <FinancialCalendarPage {...common}/>}
           {page === 'transactions' && <TransactionsPage {...common} privateSectionsUnlocked={privateSectionsUnlocked} openNewRequested={openNewTransaction} onNewRequestHandled={() => setOpenNewTransaction(false)}/>}
+          {page === 'recurring' && <RecurringTransactionsPage {...common}/>}
+          {page === 'comparison' && <MonthComparisonPage {...common}/>}
+          {page === 'templates' && privateSectionsUnlocked && <TransactionTemplatesPage {...common}/>}
           {page === 'categories' && <CategoriesPage {...common}/>}
           {page === 'accounts' && <AccountsPage {...common}/>}
           {page === 'cards' && <CardsPage {...common}/>}
@@ -397,7 +408,7 @@ function Dashboard({ data, month, setMonth, showValues, revision, navigate, onNe
   useEffect(() => {
     let active = true;
     Promise.all([getMonthSummary(month), db.transactions.orderBy('date').reverse().toArray()])
-      .then(([monthSummary, transactions]) => { if (active) { setSummary(monthSummary); setRecent(transactions.filter((item) => item.type !== 'expense' || isExpenseInAccountingPeriod(item.date)).slice(0, 6)); } });
+      .then(([monthSummary, transactions]) => { if (active) { setSummary(monthSummary); setRecent(transactions.filter((item) => isTransactionVisibleByDate(item.date, today()) && (item.type !== 'expense' || isExpenseInAccountingPeriod(item.date))).slice(0, 6)); } });
     return () => { active = false; };
   }, [month, revision]);
   const accountName = (id?: string) => data.accounts.find((account) => account.id === id)?.name ?? '—';
@@ -484,7 +495,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
       db.transactions.where('month').equals(month).toArray(),
       getInstallmentsForMonth(month),
     ]).then(([rows, installments]) => {
-      setItems(rows.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)));
+      setItems(rows.filter((item) => isTransactionVisibleByDate(item.date, today())).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)));
       setMonthInstallments(installments);
     });
   }, [month, revision]);
@@ -535,7 +546,7 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     if (editing?.paymentMode === 'card-credit') { await act(async () => { throw new Error('Para alterar uma compra parcelada, exclua o parcelamento atual e registre a compra novamente.'); }); return; }
     const ok = await act(() => paymentMode === 'card-credit'
       ? createCardPurchase({ description: String(payload.get('description') ?? ''), totalCents: toCents(raw), cardId: String(payload.get('cardId') || ''), installmentsCount: Number(payload.get('installmentsCount') || 1), purchaseDate: String(payload.get('date')), firstDueMonth: String(payload.get('firstDueMonth') || addMonths(String(payload.get('date')).slice(0, 7), 1)), categoryId, expenseClass, notes, sharedWith })
-      : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, reserveId: paymentMode === 'reserve-plans' ? String(payload.get('reserveId') || '') || undefined : undefined, notes, sharedWith }),
+      : saveTransaction({ id: editing?.id, type, description: String(payload.get('description') ?? ''), amountCents: toCents(raw), date: String(payload.get('date')), categoryId, expenseClass: type === 'expense' ? expenseClass : undefined, status: type === 'income' ? 'received' : 'paid', paymentMode, accountId: String(payload.get('accountId') || '') || undefined, reserveId: paymentMode === 'reserve-plans' ? String(payload.get('reserveId') || '') || undefined : undefined, notes, recurringId: editing?.recurringId, recurringDate: editing?.recurringDate, sharedWith }),
       editing ? 'Movimentação atualizada.' : sharedWith.length ? 'Despesa registrada e ' + sharedWith.length + ' dívida(s) vinculada(s).' : paymentMode === 'card-credit' ? 'Compra e parcelas registradas.' : 'Movimentação registrada.');
     if (ok) { const savedMonth = String(payload.get('date') ?? '').slice(0, 7); if (/^\d{4}-\d{2}$/.test(savedMonth)) setMonth(savedMonth); setModal(false); setEditing(null); }
   };
@@ -1065,7 +1076,7 @@ function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProp
 
       const totals = { Investimento: 0, Essencial: 0, 'Supérfluo': 0 };
       for (const transaction of transactions) {
-        if (transaction.type !== 'expense' || transaction.status === 'cancelled' || !isExpenseInAccountingPeriod(transaction.date)) continue;
+        if (transaction.type !== 'expense' || transaction.status === 'cancelled' || !isTransactionVisibleByDate(transaction.date, today()) || !isExpenseInAccountingPeriod(transaction.date)) continue;
         const classification = transaction.expenseClass ?? 'Essencial';
         totals[classification] += transaction.amountCents;
       }
