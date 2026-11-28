@@ -9,7 +9,7 @@ import {
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
 import { dateBR, daysInMonth, firstUsageMonth, fromCents, makeId, money, monthBR, today, toCents } from './lib/format';
-import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate } from './lib/calculations';
+import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate, shouldHideDebtorPurchaseFromMovements } from './lib/calculations';
 import {
   getAccountBalances, getCardMetrics, getCategorySpend, getDebtorMetrics, getInstallmentsForMonth,
   getMonthSummary, getPatrimony, getReserveBalances,
@@ -508,7 +508,11 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
   const filteredInstallments = monthInstallments.filter((item) => {
     const purchase = data.purchases.find((entry) => entry.id === item.purchaseId);
     const text = `${purchase?.description ?? ''} ${purchase?.notes ?? ''}`.toLowerCase();
-    return !purchase?.isFamilyDebt && (!typeFilters.length || typeFilters.includes('expense')) &&
+    const hasDebtorLink = Boolean(purchase?.isDebtorCredit || data.debtors.some((debtor) => debtor.sharedPurchaseId === purchase?.id));
+    const hiddenFromMovements = purchase
+      ? shouldHideDebtorPurchaseFromMovements(purchase.totalCents, hasDebtorLink)
+      : false;
+    return !purchase?.isFamilyDebt && !hiddenFromMovements && (!typeFilters.length || typeFilters.includes('expense')) &&
       (!categoryFilters.length || categoryFilters.includes(purchase?.categoryId ?? 'uncategorized')) &&
       (!statusFilters.length || statusFilters.includes(purchase?.expenseClass ?? 'Essencial')) &&
       text.includes((search || query).toLowerCase());

@@ -4,6 +4,7 @@ import {
   allocateInvoicePayment,
   calculateAvailableCardLimit,
   calculateUnpaidCardCommitmentCents,
+  shouldHideDebtorPurchaseFromMovements,
   calculateDailyCdiRate,
   calculateDailyReserveRate,
   isBrazilBankBusinessDay,
@@ -159,4 +160,12 @@ test('limite disponível e validação de novas dívidas usam as mesmas parcelas
   assert.equal(calculateUnpaidCardCommitmentCents([
     { dueMonth: '2026-11', amountCents: 100000, paidCents: 0 },
   ]), 0);
+});
+
+
+test('compras de devedores acima de R$ 1.000 não aparecem em Movimentações', () => {
+  assert.equal(shouldHideDebtorPurchaseFromMovements(100000, true), false);
+  assert.equal(shouldHideDebtorPurchaseFromMovements(100001, true), true);
+  assert.equal(shouldHideDebtorPurchaseFromMovements(280090, true), true);
+  assert.equal(shouldHideDebtorPurchaseFromMovements(280090, false), false);
 });

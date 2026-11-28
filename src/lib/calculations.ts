@@ -21,6 +21,11 @@ export function calculateAvailableCardLimit(limitCents: number, unpaidInstallmen
   return Math.max(0, limitCents - unpaidInstallmentsCents);
 }
 
+/** Hide high-value purchases linked to debtors from the general movements list. */
+export function shouldHideDebtorPurchaseFromMovements(totalCents: number, hasDebtorLink: boolean): boolean {
+  return hasDebtorLink && totalCents > 100_000;
+}
+
 export function calculateReserveRemaining(targetCents: number, reservedCents: number): number {
   return Math.max(targetCents - reservedCents, 0);
 }
