@@ -1,6 +1,6 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
-import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, calculateUnpaidCardCommitmentCents, isBrazilBankBusinessDay, isMonthInAccountingPeriod, splitInstallmentCents, FINANCIAL_START_MONTH, isTransactionVisibleByDate } from './calculations';
+import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, calculateUnpaidCardCommitmentCents, isBrazilBankBusinessDay, isMonthInAccountingPeriod, mergeBackupRecords, splitInstallmentCents, FINANCIAL_START_MONTH, isTransactionVisibleByDate } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction, RecurringTransaction, RecurringFrequency, TransactionTemplate } from '../types';
 
 type SharedDebtInput = { id?: string; person: string; amountCents: number };
@@ -1431,9 +1431,9 @@ export async function restoreBackup(payload: unknown, replace = false) {
       if (replace) await db.table(table).bulkPut(rows);
       else {
         const key = db.table(table).schema.primKey.keyPath as string;
-        const existing = new Set(await db.table(table).toCollection().primaryKeys());
-        const fresh = rows.filter((row) => !existing.has(row[key] as never));
-        if (fresh.length) await db.table(table).bulkAdd(fresh);
+        const existing = await db.table(table).toArray() as Record<string, unknown>[];
+        const merged = mergeBackupRecords(existing, rows, key);
+        if (merged.length) await db.table(table).bulkPut(merged);
       }
     }
   });

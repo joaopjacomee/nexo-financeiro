@@ -190,3 +190,16 @@ export function isTransactionVisibleByDate(date: string, referenceDate: string):
   const visibleFrom = [String(previousMonth.getUTCFullYear()).padStart(4, '0'), String(previousMonth.getUTCMonth() + 1).padStart(2, '0'), String(Math.min(day, lastDay)).padStart(2, '0')].join('-');
   return referenceDate >= visibleFrom;
 }
+
+
+/** Merge backup records by primary key, preferring imported values for matching IDs. */
+export function mergeBackupRecords<T extends Record<string, unknown>>(
+  existing: T[],
+  incoming: T[],
+  primaryKey: string,
+): T[] {
+  const merged = new Map<unknown, T>();
+  for (const record of existing) merged.set(record[primaryKey], record);
+  for (const record of incoming) merged.set(record[primaryKey], record);
+  return [...merged.values()];
+}

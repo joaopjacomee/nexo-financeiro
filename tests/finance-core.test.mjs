@@ -6,6 +6,7 @@ import {
   calculateUnpaidCardCommitmentCents,
   shouldHideDebtorPurchaseFromMovements,
   shouldHideDebtorInstallmentFromExpenses,
+  mergeBackupRecords,
   calculateDailyCdiRate,
   calculateDailyReserveRate,
   isBrazilBankBusinessDay,
@@ -178,4 +179,31 @@ test('parcelas com parte individual de devedor acima de R$ 100 não entram nas s
   assert.equal(shouldHideDebtorInstallmentFromExpenses(20000, 120000, [60001]), true);
   assert.equal(shouldHideDebtorInstallmentFromExpenses(30000, 120000, [30000, 40001]), true);
   assert.equal(shouldHideDebtorInstallmentFromExpenses(30000, 120000, []), false);
+});
+
+
+test('restauração de backup atualiza contas e cartões existentes e preserva registros locais extras', () => {
+  const existingAccounts = [
+    { id: 'default-account-inter', name: 'Inter antigo' },
+    { id: 'account-only-phone', name: 'Conta só do celular' },
+  ];
+  const importedAccounts = [
+    { id: 'default-account-inter', name: 'Inter personalizado' },
+    { id: 'account-from-pc', name: 'Conta do PC' },
+  ];
+  assert.deepEqual(
+    mergeBackupRecords(existingAccounts, importedAccounts, 'id'),
+    [
+      { id: 'default-account-inter', name: 'Inter personalizado' },
+      { id: 'account-only-phone', name: 'Conta só do celular' },
+      { id: 'account-from-pc', name: 'Conta do PC' },
+    ],
+  );
+
+  const existingCards = [{ id: 'default-card-inter', name: 'Cartão antigo' }];
+  const importedCards = [{ id: 'default-card-inter', name: 'Cartão personalizado' }];
+  assert.deepEqual(
+    mergeBackupRecords(existingCards, importedCards, 'id'),
+    [{ id: 'default-card-inter', name: 'Cartão personalizado' }],
+  );
 });
