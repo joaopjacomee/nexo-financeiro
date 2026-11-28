@@ -499,12 +499,16 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
       setMonthInstallments(installments);
     });
   }, [month, revision]);
-  const filtered = items.filter((item) =>
-    (!typeFilters.length || typeFilters.includes(item.type)) &&
-    (!categoryFilters.length || categoryFilters.includes(item.categoryId ?? 'uncategorized')) &&
-    (!statusFilters.length || item.type === 'income' || statusFilters.includes(item.expenseClass ?? 'Essencial')) &&
-    `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase())
-  ).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  const filtered = items.filter((item) => {
+    const hasDebtorLink = item.type === 'expense' && data.debtors.some((debtor) => debtor.sharedExpenseId === item.id);
+    const hiddenFromMovements = item.type === 'expense'
+      && shouldHideDebtorPurchaseFromMovements(item.amountCents, hasDebtorLink);
+    return !hiddenFromMovements &&
+      (!typeFilters.length || typeFilters.includes(item.type)) &&
+      (!categoryFilters.length || categoryFilters.includes(item.categoryId ?? 'uncategorized')) &&
+      (!statusFilters.length || item.type === 'income' || statusFilters.includes(item.expenseClass ?? 'Essencial')) &&
+      `${item.description} ${item.notes ?? ''}`.toLowerCase().includes((search || query).toLowerCase());
+  }).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   const filteredInstallments = monthInstallments.filter((item) => {
     const purchase = data.purchases.find((entry) => entry.id === item.purchaseId);
     const text = `${purchase?.description ?? ''} ${purchase?.notes ?? ''}`.toLowerCase();
