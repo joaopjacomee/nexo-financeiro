@@ -1,6 +1,6 @@
 import { db, initializeDatabase } from './db';
 import { daysInMonth, makeId, monthOffset, today } from './format';
-import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, isBrazilBankBusinessDay, splitInstallmentCents, FINANCIAL_START_MONTH, isTransactionVisibleByDate } from './calculations';
+import { allocateInvoicePayment, calculateDailyCdiRate, calculateDailyReserveRate, calculateReserveWithdrawalImpactCents, calculateUnpaidCardCommitmentCents, isBrazilBankBusinessDay, isMonthInAccountingPeriod, splitInstallmentCents, FINANCIAL_START_MONTH, isTransactionVisibleByDate } from './calculations';
 import type { Account, Card, CdiRate, Debtor, Investment, Reserve, ReserveClosing, Transaction, RecurringTransaction, RecurringFrequency, TransactionTemplate } from '../types';
 
 type SharedDebtInput = { id?: string; person: string; amountCents: number };
@@ -295,7 +295,7 @@ export async function createCardPurchase(input: {
   const card = await db.cards.get(input.cardId);
   if (!card) throw new Error('Cartão não encontrado.');
   const committed = await db.installments.where('cardId').equals(card.id).toArray();
-  const currentCommitment = committed.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+  const currentCommitment = calculateUnpaidCardCommitmentCents(committed);
   if (card.limitCents > 0 && input.totalCents + currentCommitment > card.limitCents) {
     throw new Error('A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
   }
@@ -568,13 +568,19 @@ export async function importPurchasesFromJson(payload: unknown): Promise<{
   const totalCents = entries.reduce((sum, entry) => sum + entry.totalCents, 0);
   const creditTotals = new Map<string, number>();
   for (const entry of entries) if (entry.mode === 'card-credit' && entry.cardId) {
-    creditTotals.set(entry.cardId, (creditTotals.get(entry.cardId) ?? 0) + entry.totalCents);
+    const installmentAmounts = splitInstallmentCents(entry.totalCents, entry.installmentsCount);
+    installmentAmounts.forEach((amountCents, index) => {
+      const dueMonth = monthOffset(entry.firstDueMonth!, index);
+      if (isMonthInAccountingPeriod(dueMonth)) {
+        creditTotals.set(entry.cardId!, (creditTotals.get(entry.cardId!) ?? 0) + amountCents);
+      }
+    });
   }
-  for (const [cardId, batchTotal] of creditTotals) {
+  for (const [cardId, batchCommitment] of creditTotals) {
     const card = cards.find((item) => item.id === cardId)!;
     const currentInstallments = await db.installments.where('cardId').equals(cardId).toArray();
-    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
-    if (card.limitCents > 0 && batchTotal + currentCommitment > card.limitCents) {
+    const currentCommitment = calculateUnpaidCardCommitmentCents(currentInstallments);
+    if (card.limitCents > 0 && batchCommitment + currentCommitment > card.limitCents) {
       throw new Error('A importação excede o limite cadastrado do cartão ' + card.name + '. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
     }
   }
@@ -863,10 +869,10 @@ export async function updateCardPurchase(input: {
   const removedIds = [...oldIds].filter((id) => !newIds.has(id));
 
   const targetCardInstallments = await db.installments.where('cardId').equals(card.id).toArray();
-  const otherCommitments = targetCardInstallments
-    .filter((item) => item.purchaseId !== purchase.id)
-    .reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
-  const newCommitment = installmentRows.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+  const otherCommitments = calculateUnpaidCardCommitmentCents(
+    targetCardInstallments.filter((item) => item.purchaseId !== purchase.id),
+  );
+  const newCommitment = calculateUnpaidCardCommitmentCents(installmentRows);
   if (card.limitCents > 0 && otherCommitments + newCommitment > card.limitCents) {
     throw new Error('A alteração excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - otherCommitments) / 100).toFixed(2) + '.');
   }
@@ -963,7 +969,7 @@ export async function createDebtor(input: Omit<Debtor, 'id' | 'createdAt' | 'lin
     const firstDueMonth = input.firstDueMonth ?? monthOffset(input.originDate.slice(0, 7), 1);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(firstDueMonth)) throw new Error('Informe o mês da primeira fatura.');
     const currentInstallments = await db.installments.where('cardId').equals(card.id).toArray();
-    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+    const currentCommitment = calculateUnpaidCardCommitmentCents(currentInstallments);
     if (card.limitCents > 0 && input.originalCents + currentCommitment > card.limitCents) {
       throw new Error('A compra excede o limite cadastrado do cartão. Limite livre estimado: R$ ' + ((card.limitCents - currentCommitment) / 100).toFixed(2) + '.');
     }
@@ -1059,14 +1065,11 @@ export async function updateDebtor(input: {
       db.installments.where('purchaseId').equals(purchase.id).toArray(),
     ]);
     if (!card || !currentInstallments.length) throw new Error('Não foi possível localizar o cartão ou as parcelas desta dívida.');
-    const currentCommitment = currentInstallments.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
-    const otherCommitment = (await db.installments.where('cardId').equals(card.id).toArray())
-      .filter((item) => item.purchaseId !== purchase.id)
-      .reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
-    if (card.limitCents > 0 && input.originalCents - currentInstallments.reduce((sum, item) => sum + item.paidCents, 0) + otherCommitment > card.limitCents) {
-      throw new Error('O novo valor excede o limite disponível do cartão.');
-    }
     const sorted = currentInstallments.sort((a, b) => a.number - b.number);
+    const otherCommitment = calculateUnpaidCardCommitmentCents(
+      (await db.installments.where('cardId').equals(card.id).toArray())
+        .filter((item) => item.purchaseId !== purchase.id),
+    );
     const amounts = splitInstallmentCents(input.originalCents, sorted.length);
     for (let index = 0; index < amounts.length; index += 1) amounts[index] = Math.max(amounts[index], sorted[index].paidCents);
     let excess = amounts.reduce((sum, amount) => sum + amount, 0) - input.originalCents;
@@ -1077,6 +1080,12 @@ export async function updateDebtor(input: {
       excess -= reduction;
     }
     if (excess > 0) throw new Error('O novo valor não cobre as parcelas que já foram pagas.');
+    const updatedCommitment = calculateUnpaidCardCommitmentCents(
+      sorted.map((item, index) => ({ ...item, amountCents: amounts[index] })),
+    );
+    if (card.limitCents > 0 && updatedCommitment + otherCommitment > card.limitCents) {
+      throw new Error('O novo valor excede o limite disponível do cartão.');
+    }
     await db.transaction('rw', db.debtors, db.purchases, db.installments, db.months, async () => {
       await db.debtors.update(debtor.id, {
         person, description, originalCents: input.originalCents, originDate: input.originDate,

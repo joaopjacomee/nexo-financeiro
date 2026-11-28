@@ -146,6 +146,15 @@ export function isMonthInAccountingPeriod(month: string): boolean {
   return /^\d{4}-\d{2}$/.test(month) && month >= FINANCIAL_START_MONTH;
 }
 
+/** Sum unpaid card installments using the exact accounting-period rule used by card metrics. */
+export function calculateUnpaidCardCommitmentCents(
+  installments: Array<{ dueMonth: string; amountCents: number; paidCents: number }>,
+): number {
+  return installments
+    .filter((item) => isMonthInAccountingPeriod(item.dueMonth))
+    .reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+}
+
 export function isExpenseInAccountingPeriod(date: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) && date.slice(0, 7) >= FINANCIAL_START_MONTH;
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   allocateInvoicePayment,
   calculateAvailableCardLimit,
+  calculateUnpaidCardCommitmentCents,
   calculateDailyCdiRate,
   calculateDailyReserveRate,
   isBrazilBankBusinessDay,
@@ -142,4 +143,20 @@ test('movimentações e receitas com data válida aparecem na data prevista', ()
   assert.equal(isTransactionVisibleByDate('2026-12-15', '2026-12-15'), true);
   assert.equal(isTransactionVisibleByDate('inválida', '2026-12-15'), false);
   assert.equal(isTransactionVisibleByDate('2026-12-15', 'inválida'), false);
+});
+
+
+test('limite disponível e validação de novas dívidas usam as mesmas parcelas do período financeiro', () => {
+  const installments = [
+    { dueMonth: '2026-11', amountCents: 90000, paidCents: 0 },
+    { dueMonth: '2026-12', amountCents: 30000, paidCents: 5000 },
+    { dueMonth: '2027-01', amountCents: 10000, paidCents: 0 },
+  ];
+  const used = calculateUnpaidCardCommitmentCents(installments);
+  assert.equal(used, 35000);
+  assert.equal(calculateAvailableCardLimit(298172, used), 263172);
+  assert.equal(calculateAvailableCardLimit(298172, 0) - 280090, 18082);
+  assert.equal(calculateUnpaidCardCommitmentCents([
+    { dueMonth: '2026-11', amountCents: 100000, paidCents: 0 },
+  ]), 0);
 });

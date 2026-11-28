@@ -1,6 +1,6 @@
 import type { Account, Card, Debtor, Installment, Reserve, Transaction } from '../types';
 import { db } from './db';
-import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents, FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate } from './calculations';
+import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents, calculateUnpaidCardCommitmentCents, FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate } from './calculations';
 import { thisMonth, today } from './format';
 
 export interface AccountBalance { account: Account; balanceCents: number; }
@@ -42,7 +42,7 @@ export async function getCardMetrics(): Promise<CardMetrics[]> {
   const currentMonth = thisMonth();
   return cards.map((card) => {
     const related = installments.filter((item) => item.cardId === card.id && isMonthInAccountingPeriod(item.dueMonth));
-    const usedCents = related.reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
+    const usedCents = calculateUnpaidCardCommitmentCents(related);
     const nextInvoiceCents = related.filter((item) => item.dueMonth === currentMonth).reduce((sum, item) => sum + Math.max(0, item.amountCents - item.paidCents), 0);
     return { card, usedCents, availableCents: calculateAvailableCardLimit(card.limitCents, usedCents), nextInvoiceCents };
   });
