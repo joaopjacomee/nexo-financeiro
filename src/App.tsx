@@ -9,7 +9,7 @@ import {
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, initializeDatabase } from './lib/db';
 import { dateBR, daysInMonth, firstUsageMonth, fromCents, makeId, money, monthBR, today, toCents } from './lib/format';
-import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate, shouldHideDebtorPurchaseFromMovements } from './lib/calculations';
+import { isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate, shouldHideDebtorInstallmentFromExpenses, shouldHideDebtorPurchaseFromMovements } from './lib/calculations';
 import {
   getAccountBalances, getCardMetrics, getCategorySpend, getDebtorMetrics, getInstallmentsForMonth,
   getMonthSummary, getPatrimony, getReserveBalances,
@@ -513,8 +513,12 @@ function TransactionsPage({ data, month, setMonth, showValues, revision, refresh
     const purchase = data.purchases.find((entry) => entry.id === item.purchaseId);
     const text = `${purchase?.description ?? ''} ${purchase?.notes ?? ''}`.toLowerCase();
     const hasDebtorLink = Boolean(purchase?.isDebtorCredit || data.debtors.some((debtor) => debtor.sharedPurchaseId === purchase?.id));
+    const debtorAmountsCents = purchase
+      ? data.debtors.filter((debtor) => debtor.sharedPurchaseId === purchase.id).map((debtor) => debtor.originalCents)
+      : [];
     const hiddenFromMovements = purchase
       ? shouldHideDebtorPurchaseFromMovements(purchase.totalCents, hasDebtorLink)
+        || shouldHideDebtorInstallmentFromExpenses(item.amountCents, purchase.totalCents, debtorAmountsCents)
       : false;
     return !purchase?.isFamilyDebt && !hiddenFromMovements && (!typeFilters.length || typeFilters.includes('expense')) &&
       (!categoryFilters.length || categoryFilters.includes(purchase?.categoryId ?? 'uncategorized')) &&
@@ -1150,7 +1154,8 @@ function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProp
       db.transactions.where('month').equals(month).toArray(),
       db.installments.where('dueMonth').equals(month).toArray(),
       db.purchases.toArray(),
-    ]).then(([categorySpend, monthSummary, transactions, installments, purchases]) => {
+      db.debtors.toArray(),
+    ]).then(([categorySpend, monthSummary, transactions, installments, purchases, debtors]) => {
       if (!active) return;
       setSpend(categorySpend);
       setSummary(monthSummary);
@@ -1163,9 +1168,18 @@ function ReportsPage({ data, month, setMonth, showValues, revision }: CommonProp
       }
       if (isMonthInAccountingPeriod(month)) {
         const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
+        const debtorAmountsByPurchaseId = new Map<string, number[]>();
+        for (const debtor of debtors) {
+          if (!debtor.sharedPurchaseId) continue;
+          const amounts = debtorAmountsByPurchaseId.get(debtor.sharedPurchaseId) ?? [];
+          amounts.push(debtor.originalCents);
+          debtorAmountsByPurchaseId.set(debtor.sharedPurchaseId, amounts);
+        }
         for (const installment of installments) {
           const purchase = purchaseById.get(installment.purchaseId);
           if (purchase?.isFamilyDebt) continue;
+          const debtorAmounts = debtorAmountsByPurchaseId.get(installment.purchaseId) ?? [];
+          if (purchase && shouldHideDebtorInstallmentFromExpenses(installment.amountCents, purchase.totalCents, debtorAmounts)) continue;
           const classification = purchase?.expenseClass ?? 'Essencial';
           totals[classification] += installment.amountCents;
         }

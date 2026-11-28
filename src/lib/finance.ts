@@ -1,6 +1,6 @@
 import type { Account, Card, Debtor, Installment, Reserve, Transaction } from '../types';
 import { db } from './db';
-import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents, calculateUnpaidCardCommitmentCents, FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate } from './calculations';
+import { calculateAvailableCardLimit, calculateFreeCashCents, calculateMonthlyFreeCents, calculateUnpaidCardCommitmentCents, FINANCIAL_START_MONTH, isExpenseInAccountingPeriod, isMonthInAccountingPeriod, isTransactionVisibleByDate, shouldHideDebtorInstallmentFromExpenses } from './calculations';
 import { thisMonth, today } from './format';
 
 export interface AccountBalance { account: Account; balanceCents: number; }
@@ -49,12 +49,21 @@ export async function getCardMetrics(): Promise<CardMetrics[]> {
 }
 
 export async function getMonthSummary(month: string): Promise<MonthSummary> {
-  const [transactions, installments, reserveMovements, purchases] = await Promise.all([
+  const [transactions, installments, reserveMovements, purchases, debtors] = await Promise.all([
     db.transactions.where('month').equals(month).toArray(),
     db.installments.where('dueMonth').equals(month).toArray(),
     db.reserveMovements.where('date').between(`${month}-01`, `${month}-31`, true, true).toArray(),
     db.purchases.toArray(),
+    db.debtors.toArray(),
   ]);
+  const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
+  const debtorAmountsByPurchaseId = new Map<string, number[]>();
+  for (const debtor of debtors) {
+    if (!debtor.sharedPurchaseId) continue;
+    const amounts = debtorAmountsByPurchaseId.get(debtor.sharedPurchaseId) ?? [];
+    amounts.push(debtor.originalCents);
+    debtorAmountsByPurchaseId.set(debtor.sharedPurchaseId, amounts);
+  }
   const familyPurchaseIds = new Set(purchases.filter((purchase) => purchase.isFamilyDebt).map((purchase) => purchase.id));
   const valid = transactions.filter((tx) => tx.status !== 'cancelled' && isTransactionVisibleByDate(tx.date, today()));
   const incomes = valid.filter((tx) => tx.type === 'income');
@@ -64,7 +73,12 @@ export async function getMonthSummary(month: string): Promise<MonthSummary> {
   const paidCashExpensesCents = expenses.filter((tx) => tx.status === 'paid').reduce((sum, tx) => sum + tx.amountCents, 0);
   const pendingExpensesCents = expenses.filter((tx) => tx.status === 'pending' || tx.status === 'receivable').reduce((sum, tx) => sum + tx.amountCents, 0);
   const installmentTotal = isMonthInAccountingPeriod(month)
-    ? installments.filter((item) => !familyPurchaseIds.has(item.purchaseId)).reduce((sum, item) => sum + item.amountCents, 0)
+    ? installments.filter((item) => {
+      if (familyPurchaseIds.has(item.purchaseId)) return false;
+      const purchase = purchaseById.get(item.purchaseId);
+      const debtorAmounts = debtorAmountsByPurchaseId.get(item.purchaseId) ?? [];
+      return !purchase || !shouldHideDebtorInstallmentFromExpenses(item.amountCents, purchase.totalCents, debtorAmounts);
+    }).reduce((sum, item) => sum + item.amountCents, 0)
     : 0;
   const countedReserveMovements = isMonthInAccountingPeriod(month) ? reserveMovements : [];
   const reserveDepositsCents = countedReserveMovements.reduce((sum, item) => sum + Math.max(0, item.availableBalanceImpactCents ?? 0), 0);
@@ -121,13 +135,26 @@ export async function getPatrimony() {
 }
 
 export async function getCategorySpend(month: string) {
-  const [categories, transactions, installments, purchases] = await Promise.all([
-    db.categories.toArray(), db.transactions.where('month').equals(month).toArray(), db.installments.where('dueMonth').equals(month).toArray(), db.purchases.toArray(),
+  const [categories, transactions, installments, purchases, debtors] = await Promise.all([
+    db.categories.toArray(), db.transactions.where('month').equals(month).toArray(), db.installments.where('dueMonth').equals(month).toArray(), db.purchases.toArray(), db.debtors.toArray(),
   ]);
+  const debtorAmountsByPurchaseId = new Map<string, number[]>();
+  for (const debtor of debtors) {
+    if (!debtor.sharedPurchaseId) continue;
+    const amounts = debtorAmountsByPurchaseId.get(debtor.sharedPurchaseId) ?? [];
+    amounts.push(debtor.originalCents);
+    debtorAmountsByPurchaseId.set(debtor.sharedPurchaseId, amounts);
+  }
+  const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
   return categories.map((category) => {
     const direct = transactions.filter((tx) => tx.type === 'expense' && tx.status !== 'cancelled' && isTransactionVisibleByDate(tx.date, today()) && isExpenseInAccountingPeriod(tx.date) && tx.categoryId === category.id).reduce((sum, tx) => sum + tx.amountCents, 0);
     const purchaseIds = new Set(purchases.filter((purchase) => purchase.categoryId === category.id && !purchase.isFamilyDebt).map((purchase) => purchase.id));
-    const credit = isMonthInAccountingPeriod(month) ? installments.filter((item) => purchaseIds.has(item.purchaseId)).reduce((sum, item) => sum + item.amountCents, 0) : 0;
+    const credit = isMonthInAccountingPeriod(month) ? installments.filter((item) => {
+      if (!purchaseIds.has(item.purchaseId)) return false;
+      const purchase = purchaseById.get(item.purchaseId);
+      const debtorAmounts = debtorAmountsByPurchaseId.get(item.purchaseId) ?? [];
+      return !purchase || !shouldHideDebtorInstallmentFromExpenses(item.amountCents, purchase.totalCents, debtorAmounts);
+    }).reduce((sum, item) => sum + item.amountCents, 0) : 0;
     return { category, spentCents: direct + credit };
   }).filter((item) => item.spentCents > 0);
 }

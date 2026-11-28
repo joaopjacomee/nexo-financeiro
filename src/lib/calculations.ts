@@ -26,6 +26,21 @@ export function shouldHideDebtorPurchaseFromMovements(totalCents: number, hasDeb
   return hasDebtorLink && totalCents > 100_000;
 }
 
+/** Exclude a whole installment when any debtor's proportional share exceeds R$ 100. */
+export function shouldHideDebtorInstallmentFromExpenses(
+  installmentAmountCents: number,
+  purchaseTotalCents: number,
+  debtorAmountsCents: number[],
+): boolean {
+  if (!Number.isSafeInteger(installmentAmountCents) || installmentAmountCents <= 0) return false;
+  if (!Number.isSafeInteger(purchaseTotalCents) || purchaseTotalCents <= 0) return false;
+  return debtorAmountsCents.some((amountCents) =>
+    Number.isSafeInteger(amountCents)
+    && amountCents > 0
+    && (amountCents / purchaseTotalCents) * installmentAmountCents > 10_000
+  );
+}
+
 export function calculateReserveRemaining(targetCents: number, reservedCents: number): number {
   return Math.max(targetCents - reservedCents, 0);
 }

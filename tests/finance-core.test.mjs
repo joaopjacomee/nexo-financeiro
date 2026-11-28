@@ -5,6 +5,7 @@ import {
   calculateAvailableCardLimit,
   calculateUnpaidCardCommitmentCents,
   shouldHideDebtorPurchaseFromMovements,
+  shouldHideDebtorInstallmentFromExpenses,
   calculateDailyCdiRate,
   calculateDailyReserveRate,
   isBrazilBankBusinessDay,
@@ -168,4 +169,13 @@ test('compras de devedores acima de R$ 1.000 não aparecem em Movimentações', 
   assert.equal(shouldHideDebtorPurchaseFromMovements(100001, true), true);
   assert.equal(shouldHideDebtorPurchaseFromMovements(280090, true), true);
   assert.equal(shouldHideDebtorPurchaseFromMovements(280090, false), false);
+});
+
+
+test('parcelas com parte individual de devedor acima de R$ 100 não entram nas saídas nem no balanço de despesas', () => {
+  assert.equal(shouldHideDebtorInstallmentFromExpenses(20000, 120000, [30000]), false);
+  assert.equal(shouldHideDebtorInstallmentFromExpenses(20000, 120000, [60000]), false);
+  assert.equal(shouldHideDebtorInstallmentFromExpenses(20000, 120000, [60001]), true);
+  assert.equal(shouldHideDebtorInstallmentFromExpenses(30000, 120000, [30000, 40001]), true);
+  assert.equal(shouldHideDebtorInstallmentFromExpenses(30000, 120000, []), false);
 });
